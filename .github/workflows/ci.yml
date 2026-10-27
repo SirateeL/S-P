@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -35,19 +35,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Ensure Sample PDF Exists
+    - name: Generate Étude Report
       run: |
-        python3 -c '
-        import fitz
-        doc = fitz.open()
-        page = doc.new_page()
-        page.insert_text((50, 50), "1. Course Grading Guidelines\n\nFinal Exam: 40%\nGroup Project: 30%\nQuizzes: 20%\nAttendance: 10%\n\nLate submissions lose 5% per day.", fontsize=12)
-        doc.save("sample_syllabus.pdf")
-        '
-
-    - name: Run Étude Analysis Engine
-      run: |
+        mkdir -p output
         python pdf_analyzer.py sample_syllabus.pdf -q "How is grading weighted?" || true
+        if [ -f output/report.html ]; then cp output/report.html output/index.html; fi
 
     - name: Setup Pages
       uses: actions/configure-pages@v5
