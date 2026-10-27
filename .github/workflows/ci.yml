@@ -1,13 +1,16 @@
-name: Étude Pipeline & Report Build
+name: Étude Pipeline & Publish
 
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
 
 jobs:
-  build-and-test:
+  build-and-deploy:
     runs-on: ubuntu-24.04
 
     steps:
@@ -24,12 +27,12 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run Sample Test Analysis
+    - name: Run Analysis
       run: |
         python pdf_analyzer.py sample_syllabus.pdf -q "How is grading weighted?" || true
 
-    - name: Upload HTML Report Artifact
-      uses: actions/upload-artifact@v4
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v4
       with:
-        name: etude-html-report
-        path: output/report.html
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./output
