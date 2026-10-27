@@ -1,16 +1,24 @@
-name: Étude Pipeline & Publish
+name: Étude Pipeline & GitHub Pages Deploy
 
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
 
 permissions:
   contents: write
   pages: write
   id-token: write
 
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
 jobs:
   build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -27,12 +35,28 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run Analysis
+    - name: Ensure Sample PDF Exists
+      run: |
+        python3 -c '
+        import fitz
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((50, 50), "1. Course Grading Guidelines\n\nFinal Exam: 40%\nGroup Project: 30%\nQuizzes: 20%\nAttendance: 10%\n\nLate submissions lose 5% per day.", fontsize=12)
+        doc.save("sample_syllabus.pdf")
+        '
+
+    - name: Run Étude Analysis Engine
       run: |
         python pdf_analyzer.py sample_syllabus.pdf -q "How is grading weighted?" || true
 
-    - name: Deploy to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v4
+    - name: Setup Pages
+      uses: actions/configure-pages@v5
+
+    - name: Upload Pages Artifact
+      uses: actions/upload-pages-artifact@v3
       with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./output
+        path: 'output'
+
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
