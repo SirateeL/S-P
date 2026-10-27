@@ -123,18 +123,21 @@ Passing a PDF again is cheap. It is re-parsed, but its embeddings are cached by 
 
 ## Nº 06 — The reports
 
-Both reports share one visual grammar, after **JW Anderson's** structural framing and **Lemaire's** muted restraint.
+Both reports share one visual grammar: JW Anderson's architectural, utilitarian structure, set in a quiet editorial register.
 
 | | Hex | Role |
 |---|---|---|
-| Warm stone | `#F5F4F0` | Ground |
-| Deep espresso | `#1C1B1A` | Type, structure, the match bar |
-| Muted slate | `#7E7B75` | Labels, secondary text, outlined numerals |
+| Raw linen | `#F5F3EE` | Ground |
+| Parchment | `#EFECE6` | Evidence cards |
+| Charcoal | `#191817` | Type, structural rules, match bars |
+| Warm taupe | `#8A857B` | Metadata labels, secondary text |
+| Hairline | `#D3CEC6` | 1px dividers |
 
-- **Asymmetric borders.** Each citation carries a heavy top and left edge, a slate base, and an offset frame that only partly encloses it. The masthead rule is doubled at unequal lengths.
-- **Hairlines over fills.** Structure comes from 1px rules and a 3px tab, never from boxes of colour.
-- **Type.** A light serif for reading (Cormorant Garamond if installed, otherwise Iowan Old Style, Palatino, Georgia), monospace capitals for metadata, outlined numerals for the questions.
-- **Offline.** No web fonts, no scripts, no external requests.
+- **Type.** Headings and synthesised prose use a high-contrast serif stack (`Didot`, `Bodoni MT`, `Cinzel`, `Georgia`). Labels, data and anchors use a system grotesque stack (`-apple-system`, `Helvetica Neue`, `Arial`). Labels are 10.5px, uppercase, tracked at `0.12em`.
+- **Structure.** A 12-column grid with an asymmetric masthead, a sticky question index, hairline dividers and a charcoal rule opening each question (`01 //`).
+- **Synthesis** is set as a pull-quote at `line-height: 1.7`. Quotation marks are reserved for verbatim passages, so generated text never looks like a quote.
+- **Evidence cards.** A responsive grid: section heading as a pill, page and paragraph as bold anchors, the exact quote as a pull-quote, and a match bar. The full paragraph opens beneath.
+- **Offline.** No web fonts, no scripts, no external requests, plus a Content-Security-Policy that forbids them. Ready to print.
 
 `RESULTS.md` keeps to the same restraint: a document register, one evidence table per question, block-character match bars (`▮▮▮▮▮▮▯▯▯▯`) and quoted passages.
 

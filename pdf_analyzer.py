@@ -713,96 +713,144 @@ def render_markdown(run: Run) -> str:
     return "\n".join(L)
 
 
-CSS = """
-:root{--stone:#F5F4F0;--espresso:#1C1B1A;--slate:#7E7B75;--rule:#D9D6CE;--panel:#EEECE6;
---serif:"Cormorant Garamond","Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
---mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace}
+CSS = r"""
+:root{
+--linen:#F5F3EE;--parchment:#EFECE6;--ink:#191817;--taupe:#8A857B;--rule:#D3CEC6;
+--serif:"Didot","Bodoni MT","Cinzel","Georgia",serif;
+--sans:-apple-system,BlinkMacSystemFont,"Helvetica Neue","Arial",sans-serif;
+--gutter:24px}
 *{box-sizing:border-box;margin:0;padding:0}
-html{background:var(--stone);color:var(--espresso);scroll-behavior:smooth;
+html{background:var(--linen);color:var(--ink);scroll-behavior:smooth;
 -webkit-print-color-adjust:exact;print-color-adjust:exact}
-body{font-family:var(--serif);font-size:18px;line-height:1.62;-webkit-font-smoothing:antialiased;
-text-rendering:optimizeLegibility}
+body{font-family:var(--serif);font-size:17px;line-height:1.7;-webkit-font-smoothing:antialiased;
+text-rendering:optimizeLegibility;background:var(--linen)}
 a{color:inherit}
-.label{font-family:var(--mono);font-size:.64rem;letter-spacing:.16em;text-transform:uppercase;
-color:var(--slate);font-weight:400}
-.page{max-width:1200px;margin:0 auto;padding:0 40px 96px}
-.grid{display:grid;grid-template-columns:minmax(150px,2fr) minmax(0,9fr);column-gap:48px}
-.mast{padding-top:72px}
-.mast .label{padding-top:1.4rem}
-h1{font-weight:300;font-size:clamp(3.4rem,9vw,7.6rem);line-height:.9;letter-spacing:-.03em}
-.sub{margin-top:18px;font-style:italic;font-size:1.25rem;color:var(--slate);max-width:48ch}
-.dbl{position:relative;height:9px;margin:56px 0 36px}
-.dbl::before,.dbl::after{content:"";position:absolute;right:0;height:1px;background:var(--espresso)}
-.dbl::before{top:0;width:100%}.dbl::after{top:8px;width:36%}
-dl.meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-left:1px solid var(--espresso)}
-dl.meta div{padding:2px 20px 4px}
-dl.meta dd{font-size:1.08rem;overflow-wrap:anywhere}
-table.reg{width:100%;border-collapse:collapse;font-size:.98rem}
-table.reg th{font-family:var(--mono);font-size:.6rem;letter-spacing:.16em;text-transform:uppercase;
-color:var(--slate);font-weight:400;text-align:left;padding:0 12px 10px 0;border-bottom:1px solid var(--espresso)}
-table.reg td{padding:11px 12px 11px 0;border-bottom:1px solid var(--rule);vertical-align:top}
+.label,dt,th,summary{font-family:var(--sans);font-size:10.5px;line-height:1.4;letter-spacing:.12em;
+text-transform:uppercase;font-weight:500;color:var(--taupe)}
+.page{max-width:1240px;margin:0 auto;padding:0 40px 96px}
+.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));column-gap:var(--gutter)}
+
+/* ---- masthead ---- */
+.topbar{padding:22px 0 18px;border-bottom:1px solid var(--rule);align-items:baseline}
+.topbar .wm{grid-column:1/4;color:var(--ink);font-weight:700;letter-spacing:.32em}
+.topbar .mid{grid-column:4/10}
+.topbar .end{grid-column:10/13;text-align:right}
+.hero{padding:88px 0 0;align-items:end}
+h1{grid-column:1/10;font-weight:400;font-size:clamp(3.6rem,11.5vw,9.6rem);line-height:.86;
+letter-spacing:-.025em;margin-left:-.04em}
+.hero .stamp{grid-column:10/13;text-align:right;padding-bottom:.9rem}
+.hero .stamp b{display:block;color:var(--ink);font-weight:600}
+.sub{grid-column:4/12;margin-top:30px;font-size:1.2rem;line-height:1.5;color:var(--taupe);font-style:italic}
+.meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin-top:64px;
+border-top:1px solid var(--ink);border-bottom:1px solid var(--rule)}
+.meta>div{padding:16px 20px 18px 0}
+.meta>div+div{padding-left:20px;border-left:1px solid var(--rule)}
+.meta dd{margin-top:6px;font-size:1.18rem;line-height:1.35;overflow-wrap:anywhere}
+
+/* ---- register ---- */
+.regwrap{overflow-x:auto;margin-top:8px}
+table.reg{width:100%;border-collapse:collapse}
+table.reg th{text-align:left;padding:22px 16px 12px 0;border-bottom:1px solid var(--rule);white-space:nowrap}
+table.reg td{padding:13px 16px 13px 0;border-bottom:1px solid var(--rule);vertical-align:baseline;font-size:1.02rem;line-height:1.4}
 table.reg th.n{text-align:right}
-table.reg td.n{text-align:right;font-family:var(--mono);font-size:.78rem}
-.regwrap{overflow-x:auto;margin-top:40px}
-.warn{margin-top:14px;font-family:var(--mono);font-size:.68rem;letter-spacing:.04em;color:var(--slate)}
-.frame{margin-top:72px}
-.rail{position:sticky;top:32px;align-self:start}
-.rail ol{list-style:none;margin-top:14px;border-top:1px solid var(--espresso)}
-.rail li a{display:grid;grid-template-columns:2rem 1fr;padding:10px 0;border-bottom:1px solid var(--rule);
-text-decoration:none;font-size:.88rem;line-height:1.35}
-.rail li a:hover{color:var(--slate)}
+table.reg td.n{text-align:right;font-family:var(--sans);font-size:12.5px;font-variant-numeric:tabular-nums}
+table.reg td.f,table.reg td.k{font-family:var(--sans);font-size:12.5px;color:var(--taupe)}
+table.reg tr:last-child td{border-bottom:1px solid var(--ink)}
+.warn{margin-top:14px;font-family:var(--sans);font-size:12px;color:var(--taupe)}
+
+/* ---- body frame ---- */
+.frame{margin-top:88px}
+.rail{grid-column:1/4;position:sticky;top:28px;align-self:start}
+.rail ol{list-style:none;margin-top:14px;border-top:1px solid var(--ink)}
+.rail li a{display:grid;grid-template-columns:2.4rem 1fr;padding:11px 0;border-bottom:1px solid var(--rule);
+text-decoration:none;font-size:.9rem;line-height:1.4;transition:color .15s}
+.rail li a:hover{color:var(--taupe)}
 .rail .rt{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.plate{border-top:1px solid var(--espresso);padding-bottom:72px;scroll-margin-top:24px}
-.plate::before{content:"";display:block;width:64px;height:3px;background:var(--espresso);margin-top:-2px}
-.plate-head{display:grid;grid-template-columns:5.6rem 1fr;column-gap:28px;align-items:end;margin:30px 0 34px}
-.num{font-size:5.4rem;font-weight:300;line-height:.8;color:var(--slate);font-variant-numeric:lining-nums}
-@supports (-webkit-text-stroke:1px #000){.num{color:transparent;-webkit-text-stroke:1px var(--espresso)}}
-h2{font-weight:400;font-size:1.7rem;line-height:1.22;letter-spacing:-.005em}
-.indent{margin-left:calc(5.6rem + 28px)}
-.answer{max-width:62ch;font-size:1.28rem;line-height:1.56;margin-bottom:44px}
-.answer p+p,.answer ul{margin-top:.9em}
+main{grid-column:4/13}
+
+/* ---- question & synthesis ---- */
+.plate{padding-bottom:88px;scroll-margin-top:24px}
+.plate+.plate{border-top:1px solid var(--ink);padding-top:30px}
+.plate:first-child{border-top:1px solid var(--ink);padding-top:30px}
+.plate-head{display:grid;grid-template-columns:5.2rem minmax(0,1fr);column-gap:var(--gutter);align-items:baseline}
+.qn{font-family:var(--sans);font-size:13px;font-weight:700;letter-spacing:.1em;color:var(--ink);white-space:nowrap}
+.qn i{font-style:normal;color:var(--taupe);font-weight:400;margin-left:.35em}
+h2{font-weight:400;font-size:clamp(1.55rem,3vw,2.15rem);line-height:1.22;letter-spacing:-.01em}
+.synth{margin:40px 0 0 calc(5.2rem + var(--gutter));padding:2px 0 2px 28px;border-left:1px solid var(--ink);max-width:68ch}
+.synth .label{margin-bottom:16px}
+.answer{font-size:1.38rem;line-height:1.7;letter-spacing:-.003em}
+.answer p+p,.answer ul{margin-top:.85em}
 .answer ul{padding-left:1.1em}
-a.ref,span.ref{font-family:var(--mono);font-size:.6rem;vertical-align:super;line-height:0;border:1px solid var(--slate);
-padding:1px 4px;margin:0 1px;text-decoration:none;letter-spacing:.04em}
-a.ref:hover{background:var(--espresso);color:var(--stone);border-color:var(--espresso)}
-span.ref.bad{border-style:dashed;color:var(--slate)}
-.note{font-family:var(--mono);font-size:.68rem;letter-spacing:.03em;color:var(--slate);max-width:70ch;margin:-22px 0 34px}
-.evidence-label{margin-bottom:22px}
-.cite{position:relative;display:grid;grid-template-columns:190px minmax(0,1fr);column-gap:32px;
-padding:26px 30px 24px 26px;margin:0 14px 40px 0;border-top:1px solid var(--espresso);
-border-left:1px solid var(--espresso);border-bottom:1px solid var(--slate);scroll-margin-top:24px}
-.cite::after{content:"";position:absolute;inset:9px -9px -9px 9px;border-right:1px solid var(--rule);
-border-bottom:1px solid var(--rule);pointer-events:none}
-.cite:target{background:var(--panel)}
-.idx{font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;display:inline-block;
-border:1px solid var(--espresso);padding:2px 7px;margin-bottom:18px}
-dl.loc{display:grid;grid-template-columns:auto 1fr;gap:7px 14px;font-size:.92rem;line-height:1.35}
-dl.loc dt{font-family:var(--mono);font-size:.58rem;letter-spacing:.16em;text-transform:uppercase;
-color:var(--slate);padding-top:.42em}
-dl.loc dd{overflow-wrap:anywhere}
-blockquote{font-style:italic;font-size:1.18rem;line-height:1.55;padding-left:20px;border-left:1px solid var(--slate)}
-.match{display:grid;grid-template-columns:auto 1fr auto;align-items:center;column-gap:14px;margin-top:22px}
-.track{position:relative;height:2px;background:var(--rule)}
-.track i{position:absolute;left:0;top:0;bottom:0;background:var(--espresso)}
-.pct{font-family:var(--mono);font-size:.78rem;letter-spacing:.04em}
-details{margin-top:18px;font-size:.95rem;color:var(--slate)}
-summary{cursor:pointer;list-style:none;font-family:var(--mono);font-size:.6rem;letter-spacing:.16em;text-transform:uppercase}
+.answer li::marker{color:var(--taupe)}
+a.ref,span.ref{font-family:var(--sans);font-size:10px;font-weight:700;letter-spacing:.02em;line-height:1.35;
+display:inline-block;position:relative;top:-.5em;min-width:1.9em;padding:1px 6px;margin:0 2px;
+text-align:center;border:1px solid var(--ink);border-radius:999px;text-decoration:none}
+a.ref:hover{background:var(--ink);color:var(--linen)}
+span.ref.bad{border:1px dashed var(--taupe);color:var(--taupe)}
+.note{margin:18px 0 0 calc(5.2rem + var(--gutter));padding-left:28px;font-family:var(--sans);font-size:12px;
+line-height:1.55;color:var(--taupe);max-width:72ch}
+
+/* ---- evidence cards ---- */
+.evidence{margin-top:56px}
+.evidence>.label{display:flex;align-items:center;gap:16px;margin-bottom:20px}
+.evidence>.label::after{content:"";flex:1;height:1px;background:var(--rule)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.cite{display:flex;flex-direction:column;background:var(--parchment);border:1px solid var(--rule);
+border-top:1px solid var(--ink);padding:20px 22px 18px;scroll-margin-top:24px;transition:background .15s,border-color .15s}
+.cite:hover{border-color:var(--taupe);border-top-color:var(--ink)}
+.cite:target{background:var(--linen);outline:1px solid var(--ink);outline-offset:3px}
+.cite-top{display:flex;align-items:flex-start;gap:12px}
+.idx{font-family:var(--sans);font-size:12px;font-weight:700;letter-spacing:.06em;padding-top:4px}
+.pill{display:inline-block;max-width:100%;font-family:var(--sans);font-size:10.5px;line-height:1.35;
+letter-spacing:.1em;text-transform:uppercase;font-weight:500;padding:4px 11px;border:1px solid var(--ink);
+border-radius:14px;overflow-wrap:anywhere}
+.src{margin-top:10px;font-family:var(--sans);font-size:11.5px;color:var(--taupe);overflow-wrap:anywhere}
+.anchors{display:flex;gap:28px;margin:18px 0 0;padding:14px 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.anchors dd{margin-top:2px;font-family:var(--sans);font-size:1.45rem;line-height:1.1;font-weight:700;
+letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+blockquote{position:relative;margin-top:22px;padding-top:30px;font-size:1.13rem;line-height:1.65;font-style:italic;
+overflow-wrap:anywhere}
+blockquote::before{content:"\201C";position:absolute;top:-8px;left:-2px;font-family:var(--serif);font-style:normal;
+font-size:3.4rem;line-height:1;color:var(--taupe)}
+.foot{margin-top:auto;padding-top:20px}
+.match{display:grid;grid-template-columns:auto 1fr auto;align-items:center;column-gap:12px}
+.track{position:relative;height:1px;background:var(--rule)}
+.track i{position:absolute;left:0;top:-1px;height:3px;background:var(--ink)}
+.pct{font-family:var(--sans);font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums}
+details{margin-top:14px}
+summary{cursor:pointer;list-style:none;display:inline-block}
 summary::-webkit-details-marker{display:none}
-summary::before{content:"+ "}details[open] summary::before{content:"\\2013 "}
-details p{margin-top:10px;max-width:64ch;line-height:1.55}
-footer{margin-top:24px;padding-top:26px;position:relative}
-footer::before{content:"";position:absolute;top:0;left:0;width:100%;height:1px;background:var(--espresso)}
-footer::after{content:"";position:absolute;top:6px;left:0;width:22%;height:1px;background:var(--espresso)}
-footer p{max-width:70ch;font-size:.9rem;color:var(--slate)}
-.sw{display:flex;gap:18px;margin-top:22px}
+summary::before{content:"+ "}details[open] summary::before{content:"\2013 "}
+summary:hover{color:var(--ink)}
+details p{margin-top:10px;padding-top:12px;border-top:1px solid var(--rule);font-size:.96rem;line-height:1.6;
+color:#4a4743;overflow-wrap:anywhere}
+
+/* ---- colophon ---- */
+footer{margin-top:16px;padding-top:28px;border-top:1px solid var(--ink)}
+footer p{max-width:72ch;font-family:var(--sans);font-size:12px;line-height:1.7;color:var(--taupe)}
+footer strong{color:var(--ink);font-weight:600}
+.sw{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:22px}
 .sw span{display:flex;align-items:center;gap:8px}
-.sw i{width:14px;height:14px;border:1px solid var(--espresso);display:inline-block}
-@media(max-width:860px){.page{padding:0 20px 72px}.grid{grid-template-columns:1fr}.rail{display:none}
-.mast{padding-top:44px}.mast .label{padding:0 0 14px}dl.meta{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:14px}
-.plate-head{grid-template-columns:1fr;row-gap:10px}.num{font-size:3.6rem}.indent{margin-left:0}
-.cite{grid-template-columns:1fr;row-gap:18px;padding:20px}table.reg{font-size:.85rem}
-table.reg th:nth-child(3),table.reg td:nth-child(3),table.reg th:nth-child(4),table.reg td:nth-child(4){display:none}}
-@media print{.rail{display:none}.grid{grid-template-columns:1fr}.cite{break-inside:avoid}.page{padding:0}}
+.sw i{width:12px;height:12px;border:1px solid var(--rule);display:inline-block}
+
+@media(max-width:960px){
+.page{padding:0 24px 72px}
+.topbar .wm{grid-column:1/7}.topbar .mid{display:none}.topbar .end{grid-column:7/13}
+.hero{padding-top:56px}h1{grid-column:1/13}.hero .stamp{grid-column:1/13;text-align:left;padding:18px 0 0}
+.sub{grid-column:1/13;margin-top:20px}
+.meta{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:44px}
+.meta>div:nth-child(3){padding-left:0;border-left:0}
+.meta>div:nth-child(n+3){border-top:1px solid var(--rule)}
+.frame{margin-top:56px}.rail{display:none}main{grid-column:1/13}
+.plate-head{grid-template-columns:1fr;row-gap:12px}
+.synth,.note{margin-left:0}.synth{padding-left:20px}.note{padding-left:20px}}
+@media(max-width:640px){
+body{font-size:16px}.answer{font-size:1.22rem}
+table.reg th:nth-child(3),table.reg td:nth-child(3),table.reg th:nth-child(4),table.reg td:nth-child(4){display:none}
+.cite{padding:18px 18px 16px}}
+@media print{
+html,body{background:#fff}.rail{display:none}main{grid-column:1/13}.page{padding:0}
+.cite,.synth{break-inside:avoid}.plate{padding-bottom:40px}}
 """
 
 
@@ -824,8 +872,8 @@ def answer_html(answer: str, qid: str, n_cites: int) -> str:
     out = []
     for b in blocks:
         lines = b.strip().split("\n")
-        if all(re.match(r"\s*[-*\u2022]\s+", ln) for ln in lines):
-            items = "".join("<li>" + re.sub(r"^\s*[-*\u2022]\s+", "", ln) + "</li>" for ln in lines)
+        if all(re.match(r"\s*[-*•]\s+", ln) for ln in lines):
+            items = "".join("<li>" + re.sub(r"^\s*[-*•]\s+", "", ln) + "</li>" for ln in lines)
             out.append("<ul>" + items + "</ul>")
         else:
             out.append("<p>" + "<br>".join(lines) + "</p>")
@@ -834,15 +882,16 @@ def answer_html(answer: str, qid: str, n_cites: int) -> str:
 
 def cite_html(qid: str, c: Citation, multi: bool) -> str:
     e = html.escape
-    tail = " \u2026" if c.truncated else ""
-    doc = f"<dt>Source</dt><dd>{e(c.doc)}</dd>" if multi else ""
+    tail = " …" if c.truncated else ""
+    src = f'<p class="src">{e(c.doc)}</p>' if multi else ""
     return (
         f'<article class="cite" id="{qid}c{c.n}">'
-        f'<aside><span class="idx">[{c.n}]</span><dl class="loc">'
-        f"<dt>Page</dt><dd>{c.page}</dd><dt>Para</dt><dd>\u00b6 {c.paragraph}</dd>"
-        f"<dt>Section</dt><dd>{e(c.section)}</dd>{doc}</dl></aside>"
-        f"<div><blockquote>\u201c{e(c.quote)}\u201d{tail}</blockquote>"
-        f'<div class="match"><span class="label">Match</span>'
+        f'<header><div class="cite-top"><span class="idx">[{c.n}]</span>'
+        f'<span class="pill" title="Section heading">{e(c.section)}</span></div>{src}</header>'
+        f'<dl class="anchors"><div><dt>Page</dt><dd>{c.page}</dd></div>'
+        f"<div><dt>Paragraph</dt><dd>¶ {c.paragraph}</dd></div></dl>"
+        f"<blockquote>{e(c.quote)}{tail}</blockquote>"
+        f'<div class="foot"><div class="match"><span class="label">Match</span>'
         f'<span class="track"><i style="width:{c.score:.1f}%"></i></span>'
         f'<span class="pct">{c.score:.1f}%</span></div>'
         f'<details><summary>Full passage</summary><p>{e(c.text)}</p></details></div></article>')
@@ -851,64 +900,79 @@ def cite_html(qid: str, c: Citation, multi: bool) -> str:
 def render_html(run: Run) -> str:
     e = html.escape
     multi = len(run.docs) > 1
-    titles = " \u00b7 ".join(d.title for d in run.docs)
-    engine = f"{run.llm} \u00b7 {run.embed_model}" if run.generated_text else f"retrieval only \u00b7 {run.embed_model}"
+    titles = " · ".join(d.title for d in run.docs)
+    engine = f"{run.llm} · {run.embed_model}" if run.generated_text else f"Retrieval only · {run.embed_model}"
     passages = sum(d.chunks for d in run.docs)
+    paragraphs = sum(d.paragraphs for d in run.docs)
+    synth_label = f"Synthesis · {run.llm}" if run.generated_text else "Retrieval only"
 
     rail = "".join(
         f'<li><a href="#q{i}"><span class="label">{i:02d}</span><span class="rt">{e(qa.question)}</span></a></li>'
         for i, qa in enumerate(run.qas, 1))
     rows = "".join(
-        f"<tr><td class='n'>{i:02d}</td><td>{e(d.title)}</td><td>{e(d.name)}</td><td>{e(d.kind)}</td>"
-        f"<td class='n'>{d.pages}</td><td class='n'>{d.paragraphs}</td><td class='n'>{d.chunks}</td></tr>"
+        f'<tr><td class="n">{i:02d}</td><td>{e(d.title)}</td><td class="f">{e(d.name)}</td>'
+        f'<td class="k">{e(d.kind)}</td><td class="n">{d.pages}</td><td class="n">{d.paragraphs}</td>'
+        f'<td class="n">{d.chunks}</td></tr>'
         for i, d in enumerate(run.docs, 1))
     warn = "".join(
-        f'<p class="warn">\u2020 {e(d.name)}: no extractable text on page(s) '
+        f'<p class="warn">† {e(d.name)}: no extractable text on page(s) '
         f'{e(", ".join(map(str, d.empty_pages[:12])))}. Scanned pages need OCR first.</p>'
         for d in run.docs if d.empty_pages)
 
     plates = []
     for i, qa in enumerate(run.qas, 1):
         qid = f"q{i}"
-        notes = "".join(f'<p class="note indent">\u2020 {e(w)}</p>' for w in qa.warnings)
-        cites = "".join(cite_html(qid, c, multi) for c in qa.citations)
-        evidence = (f'<div class="indent"><p class="label evidence-label">Evidence \u00b7 '
-                    f'{len(qa.citations)} passage{"s" if len(qa.citations) != 1 else ""}</p>{cites}</div>'
-                    if qa.citations else "")
+        notes = "".join(f'<p class="note">† {e(w)}</p>' for w in qa.warnings)
+        n = len(qa.citations)
+        plural = "" if n == 1 else "s"
+        cards = "".join(cite_html(qid, c, multi) for c in qa.citations)
+        evidence = (f'<div class="evidence"><p class="label">Evidence · {n} passage{plural}</p>'
+                    f'<div class="cards">{cards}</div></div>' if n else "")
         plates.append(
-            f'<section class="plate" id="{qid}"><div class="plate-head"><span class="num">{i:02d}</span>'
-            f"<h2>{e(qa.question)}</h2></div>"
-            f'<div class="answer indent">{answer_html(qa.answer, qid, len(qa.citations))}</div>'
+            f'<section class="plate" id="{qid}"><header class="plate-head">'
+            f'<span class="qn">{i:02d}<i>//</i></span><h2>{e(qa.question)}</h2></header>'
+            f'<div class="synth"><p class="label">{e(synth_label)}</p>'
+            f'<div class="answer">{answer_html(qa.answer, qid, n)}</div></div>'
             f"{notes}{evidence}</section>")
 
-    meta = [("Generated", f"{run.generated:%d %B %Y, %H:%M}"), ("Engine", engine),
-            ("Documents", str(len(run.docs))), ("Passages indexed", str(passages))]
-    meta_html = "".join(f"<div><dt class='label'>{k}</dt><dd>{e(v)}</dd></div>" for k, v in meta)
+    when = run.generated.strftime("%d %b %Y") + " · " + run.generated.strftime("%H:%M")
+    meta = [("Engine", engine), ("Generated", when),
+            ("Documents", f"{len(run.docs):02d}"), ("Index", f"{paragraphs} ¶ · {passages} passages")]
+    meta_html = "".join(f"<div><dt>{k}</dt><dd>{e(v)}</dd></div>" for k, v in meta)
+    stamp = f"<b>Nº {run.generated:%y%m%d-%H%M}</b>{run.generated:%d %B %Y}"
+    swatches = [("#F5F3EE", "Linen"), ("#EFECE6", "Parchment"), ("#191817", "Charcoal"),
+                ("#8A857B", "Taupe"), ("#D3CEC6", "Hairline")]
+    sw = "".join(f'<span><i style="background:{h}"></i>{n_} {h[1:]}</span>' for h, n_ in swatches)
 
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta name="color-scheme" content="light">'
         "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'\">"
-        "<title>\u00c9tude \u2014 Analysis</title><style>" + CSS + "</style></head><body><div class=\"page\">"
-        '<header class="mast grid"><p class="label">Local \u00b7 Offline<br>Reading room</p>'
-        f'<div><h1>Analysis</h1><p class="sub">{e(titles)}</p></div></header>'
-        '<div class="dbl"></div>'
+        "<title>Étude — Analysis</title><style>" + CSS + "</style></head><body><div class=\"page\">"
+        '<div class="topbar grid"><span class="label wm">Étude</span>'
+        '<span class="label mid">Local · Offline · Reading report</span>'
+        f'<span class="label end">{run.generated:%Y}</span></div>'
+        '<header class="hero grid"><h1>Analysis</h1>'
+        f'<p class="label stamp">{stamp}</p>'
+        f'<p class="sub">{e(titles)}</p></header>'
         f'<dl class="meta">{meta_html}</dl>'
-        '<div class="regwrap"><table class="reg"><thead><tr><th class="n">N\u00ba</th><th>Title</th><th>File</th><th>Kind</th>'
-        '<th class="n">Pages</th><th class="n">\u00b6</th><th class="n">Passages</th></tr></thead>'
+        '<div class="regwrap"><table class="reg"><thead><tr><th class="n">Nº</th><th>Title</th><th>File</th>'
+        '<th>Kind</th><th class="n">Pages</th><th class="n">¶</th><th class="n">Passages</th></tr></thead>'
         f"<tbody>{rows}</tbody></table></div>{warn}"
         f'<div class="frame grid"><nav class="rail"><p class="label">Questions</p><ol>{rail}</ol></nav>'
         f"<main>{''.join(plates)}</main></div>"
         "<footer><p>Produced offline by pdf_analyzer.py. <strong>Match</strong> is the cosine similarity "
         "between the question and the passage embedding, times 100: a ranking signal, not a probability "
         "of correctness. Quotes are literal passages of the extracted text, with line-wrap hyphens and "
-        "ligatures normalised. A small local model can still misread its sources; the quotes are the "
-        "ground truth.</p>"
-        '<div class="sw label"><span><i style="background:#F5F4F0"></i>Stone F5F4F0</span>'
-        '<span><i style="background:#1C1B1A"></i>Espresso 1C1B1A</span>'
-        '<span><i style="background:#7E7B75"></i>Slate 7E7B75</span></div></footer>'
+        "ligatures normalised. A small local model can still misread its sources; the quotes and page "
+        "references are retrieved, not generated, and are the ground truth.</p>"
+        f'<div class="sw label">{sw}</div></footer>'
         "</div></body></html>")
+
+
+# Alias so callers can use either name.
+generate_html_report = render_html
 
 
 # --------------------------------------------------------------------------- #
