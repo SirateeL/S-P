@@ -35,11 +35,16 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Generate Étude JW Anderson Report
+    - name: Generate Studio UI & Report Artifacts
       run: |
         mkdir -p output
         python pdf_analyzer.py sample_syllabus.pdf -q "How is grading weighted?" --no-llm || true
-        if [ -f output/report.html ]; then cp output/report.html output/index.html; fi
+        python3 -c '
+        import pdf_analyzer
+        html = pdf_analyzer.APP_PAGE.replace("__NONCE__", "etude-static")
+        with open("output/index.html", "w") as f:
+            f.write(html)
+        '
 
     - name: Upload Pages Artifact
       uses: actions/upload-pages-artifact@v3
