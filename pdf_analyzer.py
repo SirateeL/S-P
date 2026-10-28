@@ -7,22 +7,32 @@
 Every citation carries: page, paragraph, section heading, an exact quoted
 snippet, and a similarity percentage. Nothing leaves localhost.
 
-    python pdf_analyzer.py paper.pdf syllabus.pdf -q "How is grading weighted?"
+    python pdf_analyzer.py paper.pdf syllabus.pdf -q "How is grading weighted?"   # command line
+    python pdf_analyzer.py --serve --open                                        # drag-and-drop in the browser
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import html
+import json
 import math
 import os
 import re
+import secrets
+import shutil
 import sys
+import threading
+import time
+import uuid
+import webbrowser
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 # Keep every library quiet and local *before* importing them.
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
@@ -56,6 +66,10 @@ SNIPPET_CHARS = 320
 EMBED_BATCH = 16
 
 console = Console(highlight=False)
+
+
+class EtudeError(Exception):
+    """A problem the user can act on (shown plainly, never as a traceback)."""
 
 
 # --------------------------------------------------------------------------- #
@@ -145,6 +159,7 @@ class Run:
     top_k: int
     docs: list
     qas: list
+    skipped: list = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -583,25 +598,31 @@ def pick_title(meta_title: str, detected: str, stem: str) -> str:
     return detected if len(detected) >= 6 else stem
 
 
-def ingest(pdf: Path, col, emb: Embedder, args, progress) -> DocInfo:
-    doc_id = doc_fingerprint(pdf, args.keep_references)
+def ingest(pdf: Path, col, emb: Embedder, kind: str = "auto", keep_refs: bool = False,
+           reindex: bool = False, on_progress=None) -> DocInfo:
+    """Parse one PDF and (unless cached) embed it into `col`.
+
+    `on_progress(done, total)` is called while embedding, so the terminal and the
+    web interface can each show their own progress.
+    """
+    doc_id = doc_fingerprint(pdf, keep_refs)
     blocks, meta = extract_blocks(pdf)
-    paras, detected = build_paragraphs(blocks, body_font_size(blocks), args.keep_references)
+    paras, detected = build_paragraphs(blocks, body_font_size(blocks), keep_refs)
     chunks = [c for p in paras for c in chunk_paragraph(p, doc_id, pdf.name)]
-    kind = args.kind if args.kind != "auto" else detect_kind(paras)
+    kind = kind if kind != "auto" else detect_kind(paras)
     info = DocInfo(doc_id, pdf.name, pick_title(meta["title"], detected, pdf.stem), kind,
                    meta["pages"], len(paras), len(chunks), meta["empty_pages"])
     if not chunks:
         return info
     existing = col.get(where={"doc_id": doc_id}, limit=1)["ids"]
-    if len(existing) and not args.reindex:
+    if len(existing) and not reindex:
         info.cached = True
         return info
     if len(existing):
         col.delete(where={"doc_id": doc_id})
-    task = progress.add_task(f"Embedding {pdf.name}", total=len(chunks))
-    vecs = emb.embed([f"{c.section}\n{c.text}" for c in chunks], "doc",
-                     on_batch=lambda done, total: progress.update(task, completed=done))
+    if on_progress:
+        on_progress(0, len(chunks))
+    vecs = emb.embed([f"{c.section}\n{c.text}" for c in chunks], "doc", on_batch=on_progress)
     for i in range(0, len(chunks), 64):
         part = chunks[i:i + 64]
         col.add(ids=[c.id for c in part], embeddings=vecs[i:i + 64],
@@ -676,6 +697,9 @@ def render_markdown(run: Run) -> str:
             L.append("")
             L.append(f"> \u2020 `{md_cell(d.name)}`: no extractable text on page(s) {pages}. "
                      "Scanned pages need OCR first.")
+    for name in run.skipped:
+        L.append("")
+        L.append(f"> \u2020 `{md_cell(name)}`: skipped, no extractable text (scanned PDF?). Run OCR first.")
     for i, qa in enumerate(run.qas, 1):
         L.append("")
         L.append("---")
@@ -713,144 +737,196 @@ def render_markdown(run: Run) -> str:
     return "\n".join(L)
 
 
-CSS = r"""
+# --------------------------------------------------------------------------- #
+# Design system (shared by report.html and the web interface)
+# --------------------------------------------------------------------------- #
+_GRAIN = ("url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'>"
+          "<filter id='g' x='0' y='0' width='100%25' height='100%25'>"
+          "<feTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/>"
+          "<feColorMatrix values='0 0 0 0 .098 0 0 0 0 .094 0 0 0 0 .09 0 0 0 .085 0'/></filter>"
+          "<rect width='100%25' height='100%25' filter='url(%23g)'/></svg>\")")
+
+TOKENS = r"""
 :root{
---linen:#F5F3EE;--parchment:#EFECE6;--ink:#191817;--taupe:#8A857B;--rule:#D3CEC6;
+--linen:#F5F3EE;--parchment:#EFECE6;--ink:#191817;--slate:#8A857B;--rule:#D3CEC6;--ink-soft:#4A4743;
 --serif:"Didot","Bodoni MT","Cinzel","Georgia",serif;
 --sans:-apple-system,BlinkMacSystemFont,"Helvetica Neue","Arial",sans-serif;
---gutter:24px}
+--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--s7:48px;--s8:64px;--s9:96px;--s10:128px;
+--gutter:24px;--ease:cubic-bezier(.2,.7,.2,1);--grain:__GRAIN__}
 *{box-sizing:border-box;margin:0;padding:0}
-html{background:var(--linen);color:var(--ink);scroll-behavior:smooth;
+html{background:var(--linen);color:var(--ink);scroll-behavior:smooth;-webkit-text-size-adjust:100%;
 -webkit-print-color-adjust:exact;print-color-adjust:exact}
-body{font-family:var(--serif);font-size:17px;line-height:1.7;-webkit-font-smoothing:antialiased;
-text-rendering:optimizeLegibility;background:var(--linen)}
+body{font-family:var(--serif);font-size:17px;line-height:1.7;font-kerning:normal;-webkit-font-smoothing:antialiased;
+text-rendering:optimizeLegibility;background:var(--linen) var(--grain)}
 a{color:inherit}
+::selection{background:var(--ink);color:var(--linen)}
+:focus-visible{outline:1px solid var(--ink);outline-offset:3px}
+h1,h2{text-wrap:balance;font-weight:400}
 .label,dt,th,summary{font-family:var(--sans);font-size:10.5px;line-height:1.4;letter-spacing:.12em;
-text-transform:uppercase;font-weight:500;color:var(--taupe)}
-.page{max-width:1240px;margin:0 auto;padding:0 40px 96px}
+text-transform:uppercase;font-weight:500;color:var(--slate)}
+.status{display:inline-flex;align-items:center;gap:var(--s2);font-family:var(--sans);font-size:10px;line-height:1.3;
+letter-spacing:.12em;text-transform:uppercase;font-weight:500;color:var(--ink-soft);padding:3px 10px 3px 9px;
+border:1px solid var(--rule);border-radius:999px;white-space:nowrap}
+.status i{width:5px;height:5px;border-radius:50%;background:var(--slate);flex:none}
+.status.ok i{background:var(--ink)}
+.status.warn{border-style:dashed;color:var(--slate)}
+.status.warn i{background:transparent;box-shadow:inset 0 0 0 1px currentColor}
+/* corner framing notches: hairline brackets inset from the edge; charcoal on hover/focus/target */
+.notched{position:relative}
+.notched::before,.notched::after{content:"";position:absolute;inset:8px;pointer-events:none;
+background:
+linear-gradient(var(--c),var(--c)) top left/10px 1px no-repeat,linear-gradient(var(--c),var(--c)) top left/1px 10px no-repeat,
+linear-gradient(var(--c),var(--c)) top right/10px 1px no-repeat,linear-gradient(var(--c),var(--c)) top right/1px 10px no-repeat,
+linear-gradient(var(--c),var(--c)) bottom left/10px 1px no-repeat,linear-gradient(var(--c),var(--c)) bottom left/1px 10px no-repeat,
+linear-gradient(var(--c),var(--c)) bottom right/10px 1px no-repeat,linear-gradient(var(--c),var(--c)) bottom right/1px 10px no-repeat}
+.notched::before{--c:var(--rule)}
+.notched::after{--c:var(--ink);opacity:0;transition:opacity .3s var(--ease)}
+.notched:hover::after,.notched:focus-within::after,.notched:target::after,.notched.on::after{opacity:1}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+""".replace("__GRAIN__", _GRAIN)
+
+LAYOUT = r"""
+.page{max-width:1280px;margin:0 auto;padding:0 var(--s7) var(--s9)}
 .grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));column-gap:var(--gutter)}
 
 /* ---- masthead ---- */
-.topbar{padding:22px 0 18px;border-bottom:1px solid var(--rule);align-items:baseline}
-.topbar .wm{grid-column:1/4;color:var(--ink);font-weight:700;letter-spacing:.32em}
+.topbar{position:relative;padding:var(--s5) 0 var(--s4);align-items:center}
+.topbar::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--rule)}
+.topbar::before{content:"";position:absolute;left:0;bottom:-1px;width:64px;height:3px;background:var(--ink);z-index:1}
+.topbar .wm{grid-column:1/4;color:var(--ink);font-weight:700;letter-spacing:.34em}
 .topbar .mid{grid-column:4/10}
-.topbar .end{grid-column:10/13;text-align:right}
-.hero{padding:88px 0 0;align-items:end}
-h1{grid-column:1/10;font-weight:400;font-size:clamp(3.6rem,11.5vw,9.6rem);line-height:.86;
-letter-spacing:-.025em;margin-left:-.04em}
-.hero .stamp{grid-column:10/13;text-align:right;padding-bottom:.9rem}
-.hero .stamp b{display:block;color:var(--ink);font-weight:600}
-.sub{grid-column:4/12;margin-top:30px;font-size:1.2rem;line-height:1.5;color:var(--taupe);font-style:italic}
-.meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin-top:64px;
+.topbar .end{grid-column:10/13;justify-self:end;display:flex;align-items:center;gap:var(--s4)}
+.hero{padding:var(--s9) 0 0;align-items:end}
+h1{grid-column:1/10;font-size:clamp(3.6rem,11.5vw,9.8rem);line-height:.86;letter-spacing:-.03em;margin-left:-.04em}
+.hero .stamp{grid-column:10/13;justify-self:end;text-align:right;padding-bottom:var(--s4)}
+.hero .stamp b{display:block;color:var(--ink);font-weight:600;margin-bottom:2px}
+.sub{grid-column:4/12;margin-top:var(--s6);font-size:1.22rem;line-height:1.55;color:var(--slate);font-style:italic;
+text-wrap:pretty}
+@media(max-width:960px){
+.page{padding:0 var(--s5) var(--s8)}
+.topbar .wm{grid-column:1/7}.topbar .mid{display:none}.topbar .end{grid-column:7/13}
+.hero{padding-top:var(--s8)}h1{grid-column:1/13}
+.hero .stamp{grid-column:1/13;justify-self:start;text-align:left;padding:var(--s5) 0 0}
+.sub{grid-column:1/13;margin-top:var(--s5)}}
+@media print{.page{padding:0}}
+"""
+
+CSS = TOKENS + LAYOUT + r"""
+.meta{position:relative;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin-top:var(--s8);
 border-top:1px solid var(--ink);border-bottom:1px solid var(--rule)}
-.meta>div{padding:16px 20px 18px 0}
-.meta>div+div{padding-left:20px;border-left:1px solid var(--rule)}
-.meta dd{margin-top:6px;font-size:1.18rem;line-height:1.35;overflow-wrap:anywhere}
+.meta::before,.meta::after{content:"+";position:absolute;top:-10px;font-family:var(--sans);font-size:15px;
+line-height:1;color:var(--ink);font-weight:300}
+.meta::before{left:-4px}.meta::after{right:-4px}
+.meta>div{padding:var(--s5) var(--s5) var(--s5) 0}
+.meta>div+div{padding-left:var(--s5);border-left:1px solid var(--rule)}
+.meta dd{margin-top:var(--s2);font-size:1.2rem;line-height:1.35;overflow-wrap:anywhere}
 
 /* ---- register ---- */
-.regwrap{overflow-x:auto;margin-top:8px}
+.regwrap{overflow-x:auto;margin-top:var(--s5)}
 table.reg{width:100%;border-collapse:collapse}
-table.reg th{text-align:left;padding:22px 16px 12px 0;border-bottom:1px solid var(--rule);white-space:nowrap}
-table.reg td{padding:13px 16px 13px 0;border-bottom:1px solid var(--rule);vertical-align:baseline;font-size:1.02rem;line-height:1.4}
+table.reg th{text-align:left;padding:var(--s4) var(--s4) var(--s3) 0;border-bottom:1px solid var(--rule);white-space:nowrap}
 table.reg th.n{text-align:right}
+table.reg td{padding:var(--s4) var(--s4) var(--s4) 0;border-bottom:1px solid var(--rule);vertical-align:middle;
+font-size:1.04rem;line-height:1.4}
 table.reg td.n{text-align:right;font-family:var(--sans);font-size:12.5px;font-variant-numeric:tabular-nums}
-table.reg td.f,table.reg td.k{font-family:var(--sans);font-size:12.5px;color:var(--taupe)}
+table.reg td.f,table.reg td.k{font-family:var(--sans);font-size:12.5px;color:var(--slate)}
 table.reg tr:last-child td{border-bottom:1px solid var(--ink)}
-.warn{margin-top:14px;font-family:var(--sans);font-size:12px;color:var(--taupe)}
+.warn-line{margin-top:var(--s4);font-family:var(--sans);font-size:12px;color:var(--slate)}
 
-/* ---- body frame ---- */
-.frame{margin-top:88px}
-.rail{grid-column:1/4;position:sticky;top:28px;align-self:start}
-.rail ol{list-style:none;margin-top:14px;border-top:1px solid var(--ink)}
-.rail li a{display:grid;grid-template-columns:2.4rem 1fr;padding:11px 0;border-bottom:1px solid var(--rule);
-text-decoration:none;font-size:.9rem;line-height:1.4;transition:color .15s}
-.rail li a:hover{color:var(--taupe)}
+/* ---- frame ---- */
+.frame{margin-top:var(--s9)}
+.rail{grid-column:1/4;position:sticky;top:var(--s6);align-self:start}
+.rail ol{list-style:none;margin-top:var(--s4);border-top:1px solid var(--ink)}
+.rail li a{display:grid;grid-template-columns:2.6rem 1fr;padding:var(--s3) 0;border-bottom:1px solid var(--rule);
+text-decoration:none;font-size:.92rem;line-height:1.45;transition:padding-left .3s var(--ease),color .2s}
+.rail li a:hover{padding-left:var(--s2);color:var(--slate)}
 .rail .rt{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 main{grid-column:4/13}
 
 /* ---- question & synthesis ---- */
-.plate{padding-bottom:88px;scroll-margin-top:24px}
-.plate+.plate{border-top:1px solid var(--ink);padding-top:30px}
-.plate:first-child{border-top:1px solid var(--ink);padding-top:30px}
-.plate-head{display:grid;grid-template-columns:5.2rem minmax(0,1fr);column-gap:var(--gutter);align-items:baseline}
+.plate{position:relative;border-top:1px solid var(--ink);padding:var(--s6) 0 var(--s9);scroll-margin-top:var(--s5)}
+.plate::before{content:"";position:absolute;top:-2px;left:0;width:48px;height:3px;background:var(--ink)}
+.plate-head{display:grid;grid-template-columns:5.4rem minmax(0,1fr);column-gap:var(--gutter);align-items:baseline}
 .qn{font-family:var(--sans);font-size:13px;font-weight:700;letter-spacing:.1em;color:var(--ink);white-space:nowrap}
-.qn i{font-style:normal;color:var(--taupe);font-weight:400;margin-left:.35em}
-h2{font-weight:400;font-size:clamp(1.55rem,3vw,2.15rem);line-height:1.22;letter-spacing:-.01em}
-.synth{margin:40px 0 0 calc(5.2rem + var(--gutter));padding:2px 0 2px 28px;border-left:1px solid var(--ink);max-width:68ch}
-.synth .label{margin-bottom:16px}
-.answer{font-size:1.38rem;line-height:1.7;letter-spacing:-.003em}
-.answer p+p,.answer ul{margin-top:.85em}
+.qn i{font-style:normal;color:var(--slate);font-weight:400;margin-left:.4em}
+h2{font-size:clamp(1.6rem,3vw,2.2rem);line-height:1.2;letter-spacing:-.012em}
+.synth{margin:var(--s7) 0 0 calc(5.4rem + var(--gutter));padding:var(--s1) 0 var(--s1) var(--s6);
+border-left:1px solid var(--ink);max-width:68ch}
+.synth-head{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s3) var(--s4);margin-bottom:var(--s5)}
+.answer{font-size:1.4rem;line-height:1.7;letter-spacing:-.003em;text-wrap:pretty}
+.answer p+p,.answer ul{margin-top:.9em}
 .answer ul{padding-left:1.1em}
-.answer li::marker{color:var(--taupe)}
+.answer li::marker{color:var(--slate)}
 a.ref,span.ref{font-family:var(--sans);font-size:10px;font-weight:700;letter-spacing:.02em;line-height:1.35;
-display:inline-block;position:relative;top:-.5em;min-width:1.9em;padding:1px 6px;margin:0 2px;
-text-align:center;border:1px solid var(--ink);border-radius:999px;text-decoration:none}
+display:inline-block;position:relative;top:-.5em;min-width:1.9em;padding:1px 6px;margin:0 2px;text-align:center;
+border:1px solid var(--ink);border-radius:999px;text-decoration:none;transition:background .2s,color .2s}
 a.ref:hover{background:var(--ink);color:var(--linen)}
-span.ref.bad{border:1px dashed var(--taupe);color:var(--taupe)}
-.note{margin:18px 0 0 calc(5.2rem + var(--gutter));padding-left:28px;font-family:var(--sans);font-size:12px;
-line-height:1.55;color:var(--taupe);max-width:72ch}
+span.ref.bad{border:1px dashed var(--slate);color:var(--slate)}
+.note{margin:var(--s5) 0 0 calc(5.4rem + var(--gutter));padding-left:var(--s6);font-family:var(--sans);font-size:12px;
+line-height:1.6;color:var(--slate);max-width:72ch}
 
-/* ---- evidence cards ---- */
-.evidence{margin-top:56px}
-.evidence>.label{display:flex;align-items:center;gap:16px;margin-bottom:20px}
+/* ---- evidence ---- */
+.evidence{margin-top:var(--s8)}
+.evidence>.label{display:flex;align-items:center;gap:var(--s4);margin-bottom:var(--s5)}
 .evidence>.label::after{content:"";flex:1;height:1px;background:var(--rule)}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:var(--s5)}
 .cite{display:flex;flex-direction:column;background:var(--parchment);border:1px solid var(--rule);
-border-top:1px solid var(--ink);padding:20px 22px 18px;scroll-margin-top:24px;transition:background .15s,border-color .15s}
-.cite:hover{border-color:var(--taupe);border-top-color:var(--ink)}
-.cite:target{background:var(--linen);outline:1px solid var(--ink);outline-offset:3px}
-.cite-top{display:flex;align-items:flex-start;gap:12px}
-.idx{font-family:var(--sans);font-size:12px;font-weight:700;letter-spacing:.06em;padding-top:4px}
-.pill{display:inline-block;max-width:100%;font-family:var(--sans);font-size:10.5px;line-height:1.35;
-letter-spacing:.1em;text-transform:uppercase;font-weight:500;padding:4px 11px;border:1px solid var(--ink);
-border-radius:14px;overflow-wrap:anywhere}
-.src{margin-top:10px;font-family:var(--sans);font-size:11.5px;color:var(--taupe);overflow-wrap:anywhere}
-.anchors{display:flex;gap:28px;margin:18px 0 0;padding:14px 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
-.anchors dd{margin-top:2px;font-family:var(--sans);font-size:1.45rem;line-height:1.1;font-weight:700;
-letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-blockquote{position:relative;margin-top:22px;padding-top:30px;font-size:1.13rem;line-height:1.65;font-style:italic;
+border-top-color:var(--ink);padding:var(--s6) var(--s6) var(--s5);scroll-margin-top:var(--s5);
+transition:transform .35s var(--ease),box-shadow .35s var(--ease),background-color .3s}
+.cite:hover{transform:translateY(-3px);box-shadow:0 18px 30px -22px rgba(25,24,23,.45);background:#F1EEE8}
+.cite:target{background:var(--linen);box-shadow:0 0 0 1px var(--ink)}
+.cite-top{display:flex;align-items:flex-start;gap:var(--s3)}
+.idx{font-family:var(--sans);font-size:12px;font-weight:700;letter-spacing:.06em;padding-top:5px}
+.tag{display:inline-block;max-width:100%;font-family:var(--sans);font-size:10.5px;line-height:1.4;letter-spacing:.1em;
+text-transform:uppercase;font-weight:500;padding:4px 12px;border:1px solid var(--ink);border-radius:14px;
 overflow-wrap:anywhere}
-blockquote::before{content:"\201C";position:absolute;top:-8px;left:-2px;font-family:var(--serif);font-style:normal;
-font-size:3.4rem;line-height:1;color:var(--taupe)}
-.foot{margin-top:auto;padding-top:20px}
-.match{display:grid;grid-template-columns:auto 1fr auto;align-items:center;column-gap:12px}
+.src{margin-top:var(--s3);font-family:var(--sans);font-size:11.5px;color:var(--slate);overflow-wrap:anywhere}
+.anchors{display:flex;gap:var(--s6);margin-top:var(--s5);padding:var(--s4) 0;border-top:1px solid var(--rule);
+border-bottom:1px solid var(--rule)}
+.anchors dd{margin-top:var(--s1);font-family:var(--sans);font-size:1.5rem;line-height:1.1;font-weight:700;
+letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+blockquote{position:relative;margin-top:var(--s5);padding-top:var(--s6);font-size:1.14rem;line-height:1.68;
+font-style:italic;overflow-wrap:anywhere;text-wrap:pretty}
+blockquote::before{content:"\201C";position:absolute;top:-6px;left:-2px;font-family:var(--serif);font-style:normal;
+font-size:3.6rem;line-height:1;color:var(--slate)}
+.foot{margin-top:auto;padding-top:var(--s5)}
+.match{display:grid;grid-template-columns:auto 1fr auto;align-items:center;column-gap:var(--s3)}
 .track{position:relative;height:1px;background:var(--rule)}
-.track i{position:absolute;left:0;top:-1px;height:3px;background:var(--ink)}
+.track i{position:absolute;left:0;top:-1px;height:3px;background:var(--ink);transition:width .6s var(--ease)}
 .pct{font-family:var(--sans);font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums}
-details{margin-top:14px}
-summary{cursor:pointer;list-style:none;display:inline-block}
+details{margin-top:var(--s4)}
+summary{cursor:pointer;list-style:none;display:inline-block;transition:color .2s}
 summary::-webkit-details-marker{display:none}
 summary::before{content:"+ "}details[open] summary::before{content:"\2013 "}
 summary:hover{color:var(--ink)}
-details p{margin-top:10px;padding-top:12px;border-top:1px solid var(--rule);font-size:.96rem;line-height:1.6;
-color:#4a4743;overflow-wrap:anywhere}
+details p{margin-top:var(--s3);padding-top:var(--s3);border-top:1px solid var(--rule);font-size:.97rem;line-height:1.65;
+color:var(--ink-soft);overflow-wrap:anywhere}
 
 /* ---- colophon ---- */
-footer{margin-top:16px;padding-top:28px;border-top:1px solid var(--ink)}
-footer p{max-width:72ch;font-family:var(--sans);font-size:12px;line-height:1.7;color:var(--taupe)}
+footer{margin-top:var(--s5);padding-top:var(--s6);border-top:1px solid var(--ink)}
+footer p{max-width:72ch;font-family:var(--sans);font-size:12px;line-height:1.75;color:var(--slate)}
 footer strong{color:var(--ink);font-weight:600}
-.sw{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:22px}
-.sw span{display:flex;align-items:center;gap:8px}
+.sw{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s5);margin-top:var(--s5)}
+.sw span{display:flex;align-items:center;gap:var(--s2)}
 .sw i{width:12px;height:12px;border:1px solid var(--rule);display:inline-block}
 
 @media(max-width:960px){
-.page{padding:0 24px 72px}
-.topbar .wm{grid-column:1/7}.topbar .mid{display:none}.topbar .end{grid-column:7/13}
-.hero{padding-top:56px}h1{grid-column:1/13}.hero .stamp{grid-column:1/13;text-align:left;padding:18px 0 0}
-.sub{grid-column:1/13;margin-top:20px}
-.meta{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:44px}
+.meta{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:var(--s7)}
 .meta>div:nth-child(3){padding-left:0;border-left:0}
 .meta>div:nth-child(n+3){border-top:1px solid var(--rule)}
-.frame{margin-top:56px}.rail{display:none}main{grid-column:1/13}
-.plate-head{grid-template-columns:1fr;row-gap:12px}
-.synth,.note{margin-left:0}.synth{padding-left:20px}.note{padding-left:20px}}
+.frame{margin-top:var(--s8)}.rail{display:none}main{grid-column:1/13}
+.plate{padding-bottom:var(--s8)}
+.plate-head{grid-template-columns:1fr;row-gap:var(--s3)}
+.synth,.note{margin-left:0}.synth{padding-left:var(--s5)}.note{padding-left:var(--s5)}}
 @media(max-width:640px){
 body{font-size:16px}.answer{font-size:1.22rem}
-table.reg th:nth-child(3),table.reg td:nth-child(3),table.reg th:nth-child(4),table.reg td:nth-child(4){display:none}
-.cite{padding:18px 18px 16px}}
+table.reg th:nth-child(3),table.reg td:nth-child(3),table.reg th:nth-child(4),table.reg td:nth-child(4),
+table.reg th:nth-child(5),table.reg td:nth-child(5){display:none}
+.cite{padding:var(--s5) var(--s5) var(--s4)}.cards{gap:var(--s4)}}
 @media print{
 html,body{background:#fff}.rail{display:none}main{grid-column:1/13}.page{padding:0}
-.cite,.synth{break-inside:avoid}.plate{padding-bottom:40px}}
+.cite,.synth{break-inside:avoid}.cite:hover{transform:none;box-shadow:none}.plate{padding-bottom:var(--s7)}
+.notched::before,.notched::after{display:none}}
 """
 
 
@@ -885,9 +961,9 @@ def cite_html(qid: str, c: Citation, multi: bool) -> str:
     tail = " …" if c.truncated else ""
     src = f'<p class="src">{e(c.doc)}</p>' if multi else ""
     return (
-        f'<article class="cite" id="{qid}c{c.n}">'
+        f'<article class="cite notched" id="{qid}c{c.n}">'
         f'<header><div class="cite-top"><span class="idx">[{c.n}]</span>'
-        f'<span class="pill" title="Section heading">{e(c.section)}</span></div>{src}</header>'
+        f'<span class="tag" title="Section heading">{e(c.section)}</span></div>{src}</header>'
         f'<dl class="anchors"><div><dt>Page</dt><dd>{c.page}</dd></div>'
         f"<div><dt>Paragraph</dt><dd>¶ {c.paragraph}</dd></div></dl>"
         f"<blockquote>{e(c.quote)}{tail}</blockquote>"
@@ -897,6 +973,17 @@ def cite_html(qid: str, c: Citation, multi: bool) -> str:
         f'<details><summary>Full passage</summary><p>{e(c.text)}</p></details></div></article>')
 
 
+def qa_status(qa: QA, generated: bool):
+    """(css class, label) for the discreet status pill beside each synthesis."""
+    if not qa.citations:
+        return "warn", "No evidence"
+    if qa.warnings:
+        return "warn", "Check citations"
+    if not generated:
+        return "", "Retrieval only"
+    return "ok", "Citations valid"
+
+
 def render_html(run: Run) -> str:
     e = html.escape
     multi = len(run.docs) > 1
@@ -904,20 +991,24 @@ def render_html(run: Run) -> str:
     engine = f"{run.llm} · {run.embed_model}" if run.generated_text else f"Retrieval only · {run.embed_model}"
     passages = sum(d.chunks for d in run.docs)
     paragraphs = sum(d.paragraphs for d in run.docs)
-    synth_label = f"Synthesis · {run.llm}" if run.generated_text else "Retrieval only"
+    synth_label = f"Synthesis · {run.llm}" if run.generated_text else "Retrieved evidence"
 
     rail = "".join(
         f'<li><a href="#q{i}"><span class="label">{i:02d}</span><span class="rt">{e(qa.question)}</span></a></li>'
         for i, qa in enumerate(run.qas, 1))
     rows = "".join(
         f'<tr><td class="n">{i:02d}</td><td>{e(d.title)}</td><td class="f">{e(d.name)}</td>'
-        f'<td class="k">{e(d.kind)}</td><td class="n">{d.pages}</td><td class="n">{d.paragraphs}</td>'
-        f'<td class="n">{d.chunks}</td></tr>'
+        f'<td class="k">{e(d.kind)}</td>'
+        f'<td><span class="status{"" if d.cached else " ok"}"><i></i>{"Cached" if d.cached else "Indexed"}</span></td>'
+        f'<td class="n">{d.pages}</td><td class="n">{d.paragraphs}</td><td class="n">{d.chunks}</td></tr>'
         for i, d in enumerate(run.docs, 1))
     warn = "".join(
-        f'<p class="warn">† {e(d.name)}: no extractable text on page(s) '
+        f'<p class="warn-line">† {e(d.name)}: no extractable text on page(s) '
         f'{e(", ".join(map(str, d.empty_pages[:12])))}. Scanned pages need OCR first.</p>'
         for d in run.docs if d.empty_pages)
+    warn += "".join(
+        f'<p class="warn-line">† {e(name)}: skipped, no extractable text (scanned PDF?). '
+        "Run OCR first, e.g. ocrmypdf.</p>" for name in run.skipped)
 
     plates = []
     for i, qa in enumerate(run.qas, 1):
@@ -926,12 +1017,14 @@ def render_html(run: Run) -> str:
         n = len(qa.citations)
         plural = "" if n == 1 else "s"
         cards = "".join(cite_html(qid, c, multi) for c in qa.citations)
-        evidence = (f'<div class="evidence"><p class="label">Evidence · {n} passage{plural}</p>'
+        evidence = (f'<div class="evidence"><p class="label">Evidence // {n} passage{plural}</p>'
                     f'<div class="cards">{cards}</div></div>' if n else "")
+        cls, text = qa_status(qa, run.generated_text)
+        pill = f'<span class="status {cls}"><i></i>{text}</span>'
         plates.append(
             f'<section class="plate" id="{qid}"><header class="plate-head">'
             f'<span class="qn">{i:02d}<i>//</i></span><h2>{e(qa.question)}</h2></header>'
-            f'<div class="synth"><p class="label">{e(synth_label)}</p>'
+            f'<div class="synth"><div class="synth-head"><p class="label">{e(synth_label)}</p>{pill}</div>'
             f'<div class="answer">{answer_html(qa.answer, qid, n)}</div></div>'
             f"{notes}{evidence}</section>")
 
@@ -941,32 +1034,35 @@ def render_html(run: Run) -> str:
     meta_html = "".join(f"<div><dt>{k}</dt><dd>{e(v)}</dd></div>" for k, v in meta)
     stamp = f"<b>Nº {run.generated:%y%m%d-%H%M}</b>{run.generated:%d %B %Y}"
     swatches = [("#F5F3EE", "Linen"), ("#EFECE6", "Parchment"), ("#191817", "Charcoal"),
-                ("#8A857B", "Taupe"), ("#D3CEC6", "Hairline")]
-    sw = "".join(f'<span><i style="background:{h}"></i>{n_} {h[1:]}</span>' for h, n_ in swatches)
+                ("#8A857B", "Slate"), ("#D3CEC6", "Hairline")]
+    sw = "".join(f'<span><i style="background:{h}"></i>{name} {h[1:]}</span>' for h, name in swatches)
 
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta name="color-scheme" content="light">'
-        "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'\">"
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; "
+        "img-src data:\">"
+        '<link rel="icon" href="data:,">'
         "<title>Étude — Analysis</title><style>" + CSS + "</style></head><body><div class=\"page\">"
         '<div class="topbar grid"><span class="label wm">Étude</span>'
         '<span class="label mid">Local · Offline · Reading report</span>'
-        f'<span class="label end">{run.generated:%Y}</span></div>'
+        f'<span class="end"><span class="status ok"><i></i>Offline</span><span class="label">{run.generated:%Y}</span></span></div>'
         '<header class="hero grid"><h1>Analysis</h1>'
         f'<p class="label stamp">{stamp}</p>'
         f'<p class="sub">{e(titles)}</p></header>'
         f'<dl class="meta">{meta_html}</dl>'
         '<div class="regwrap"><table class="reg"><thead><tr><th class="n">Nº</th><th>Title</th><th>File</th>'
-        '<th>Kind</th><th class="n">Pages</th><th class="n">¶</th><th class="n">Passages</th></tr></thead>'
-        f"<tbody>{rows}</tbody></table></div>{warn}"
+        '<th>Kind</th><th>Status</th><th class="n">Pages</th><th class="n">¶</th><th class="n">Passages</th>'
+        f"</tr></thead><tbody>{rows}</tbody></table></div>{warn}"
         f'<div class="frame grid"><nav class="rail"><p class="label">Questions</p><ol>{rail}</ol></nav>'
         f"<main>{''.join(plates)}</main></div>"
         "<footer><p>Produced offline by pdf_analyzer.py. <strong>Match</strong> is the cosine similarity "
         "between the question and the passage embedding, times 100: a ranking signal, not a probability "
-        "of correctness. Quotes are literal passages of the extracted text, with line-wrap hyphens and "
-        "ligatures normalised. A small local model can still misread its sources; the quotes and page "
-        "references are retrieved, not generated, and are the ground truth.</p>"
+        "of correctness. <strong>Citations valid</strong> means every [n] marker in the synthesis points at a "
+        "retrieved passage; it does not verify the claim. Quotes are literal passages of the extracted text, "
+        "with line-wrap hyphens and ligatures normalised. A small local model can still misread its sources; "
+        "the quotes and page references are retrieved, not generated, and are the ground truth.</p>"
         f'<div class="sw label">{sw}</div></footer>'
         "</div></body></html>")
 
@@ -1027,6 +1123,7 @@ class Ctx:
     k: int
     min_score: float
     no_llm: bool
+    quiet: bool = False
 
 
 def answer_question(question: str, kind: str, doc_ids, ctx: Ctx) -> QA:
@@ -1036,7 +1133,9 @@ def answer_question(question: str, kind: str, doc_ids, ctx: Ctx) -> QA:
     if ctx.no_llm:
         return QA(question, kind, "Retrieval only: generation was skipped (--no-llm).", cites)
     try:
-        with console.status(f"[{SLATE}]Reading locally with {ctx.model}..."):
+        spinner = (contextlib.nullcontext() if ctx.quiet
+                   else console.status(f"[{SLATE}]Reading locally with {ctx.model}..."))
+        with spinner:
             answer = generate(ctx.client, ctx.model, question, cites, kind)
         return QA(question, kind, answer, cites, audit_answer(answer, len(cites)))
     except Exception as exc:  # keep the evidence even if generation fails
@@ -1058,29 +1157,782 @@ def plan_questions(args, docs):
     return plan
 
 
-def preflight(client, host: str, args) -> str:
+def ollama_status(client, model: str, embed_model: str) -> dict:
+    """Never raises: describes what the local Ollama can do right now."""
     try:
         names = model_names(client.list())
     except Exception as exc:
-        fail(f"Cannot reach Ollama at {host}. Start it with `ollama serve`. ({exc})")
-    if not args.no_llm and not has_model(names, args.model):
-        fail(f"Model '{args.model}' is not installed. Run: ollama pull {args.model}")
-    embed_model = args.embed_model
-    if not has_model(names, embed_model):
-        if has_model(names, args.model):
-            console.print(f"[{SLATE}]'{escape(embed_model)}' is not installed; falling back to "
-                          f"'{escape(args.model)}' for embeddings (weaker retrieval). "
-                          f"For better results: ollama pull {escape(embed_model)}[/]")
-            embed_model = args.model
-        else:
-            fail(f"Embedding model '{embed_model}' is not installed. Run: ollama pull {embed_model}")
-    return embed_model
+        return {"online": False, "error": str(exc), "chat_ok": False, "embed_ok": False, "fallback": False}
+    chat_ok, embed_ok = has_model(names, model), has_model(names, embed_model)
+    return {"online": True, "error": "", "chat_ok": chat_ok, "embed_ok": embed_ok,
+            "fallback": chat_ok and not embed_ok}
+
+
+def resolve_models(client, model: str, embed_model: str, no_llm: bool, notify=None, host: str = "") -> str:
+    """Return the embedding model to use, or raise EtudeError with the fix."""
+    st = ollama_status(client, model, embed_model)
+    if not st["online"]:
+        where = f" at {host}" if host else ""
+        raise EtudeError(f"Cannot reach Ollama{where}. Start it with `ollama serve`. ({st['error']})")
+    if not no_llm and not st["chat_ok"]:
+        raise EtudeError(f"Model '{model}' is not installed. Run: ollama pull {model}")
+    if st["embed_ok"]:
+        return embed_model
+    if st["chat_ok"]:
+        if notify:
+            notify(f"'{embed_model}' is not installed; falling back to '{model}' for embeddings "
+                   f"(weaker retrieval). For better results: ollama pull {embed_model}")
+        return model
+    raise EtudeError(f"Embedding model '{embed_model}' is not installed. Run: ollama pull {embed_model}")
+
+
+def preflight(client, host: str, args) -> str:
+    try:
+        return resolve_models(client, args.model, args.embed_model, args.no_llm, host=host,
+                              notify=lambda msg: console.print(f"[{SLATE}]{escape(msg)}[/]"))
+    except EtudeError as exc:
+        fail(str(exc))
+
+
+# --------------------------------------------------------------------------- #
+# Local web interface ("try it out"): standard library only, loopback only
+# --------------------------------------------------------------------------- #
+SAFE_ID = re.compile(r"^[0-9a-f]{32}$")
+MAX_FILES_PER_RUN = 8
+MAX_QUESTIONS = 12
+KEEP_JOBS = 12
+
+APP_CSS = r"""
+.topbar .mid{grid-column:4/7}.topbar .end{grid-column:7/13;flex-wrap:wrap;justify-content:flex-end;gap:var(--s2)}
+.studio{margin-top:var(--s9);align-items:start}
+.steps{grid-column:1/6;padding-right:var(--s5)}
+.steps ol{list-style:none;border-top:1px solid var(--ink)}
+.steps li{display:grid;grid-template-columns:5.4rem minmax(0,1fr);column-gap:var(--gutter);padding:var(--s5) 0;
+border-bottom:1px solid var(--rule)}
+.qn{font-family:var(--sans);font-size:13px;font-weight:700;letter-spacing:.1em;color:var(--ink);white-space:nowrap;padding-top:.5em}
+.qn i{font-style:normal;color:var(--slate);font-weight:400;margin-left:.4em}
+.steps h3{font-weight:400;font-size:1.75rem;line-height:1.15;letter-spacing:-.01em}
+.steps li p{margin-top:var(--s2);font-size:1rem;line-height:1.65;color:var(--ink-soft)}
+.privacy{margin-top:var(--s7);padding:var(--s5) var(--s6);border:1px solid var(--rule)}
+.privacy p:not(.label){margin-top:var(--s3);font-family:var(--sans);font-size:12.5px;line-height:1.75;color:var(--ink-soft)}
+.panel{grid-column:6/13;background:var(--parchment);border:1px solid var(--rule);border-top-color:var(--ink);
+padding:var(--s7)}
+.drop{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s3);text-align:center;
+padding:var(--s9) var(--s5);background:var(--linen);border:1px solid var(--rule);cursor:pointer;
+transition:background-color .3s var(--ease),border-color .3s}
+.drop:hover,.drop.on{background-color:#F8F6F2;border-color:var(--ink)}
+.drop-title{font-size:1.9rem;line-height:1.15;letter-spacing:-.01em;transition:font-style .2s}
+.drop.on .drop-title{font-style:italic}
+.plus{position:relative;width:28px;height:28px;margin-bottom:var(--s2);transition:transform .6s var(--ease)}
+.plus::before,.plus::after{content:"";position:absolute;background:var(--ink)}
+.plus::before{left:0;right:0;top:50%;height:1px}.plus::after{top:0;bottom:0;left:50%;width:1px}
+.drop:hover .plus,.drop.on .plus{transform:rotate(90deg)}
+.files{list-style:none;margin-top:var(--s5)}
+.file{position:relative;display:grid;grid-template-columns:2rem minmax(0,1fr) auto auto;align-items:center;
+column-gap:var(--s4);padding:var(--s4) 0;border-bottom:1px solid var(--rule)}
+.fname{display:block;font-size:1.1rem;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fmeta{display:block;font-family:var(--sans);font-size:11.5px;color:var(--slate)}
+.file.error .fmeta{color:var(--ink)}
+.rm{font-family:var(--sans);background:none;border:0;font-size:20px;line-height:1;color:var(--slate);cursor:pointer;
+padding:var(--s1) var(--s2);transition:color .2s,transform .4s var(--ease)}
+.rm:hover{color:var(--ink);transform:rotate(90deg)}
+.fbar{position:absolute;left:0;right:0;bottom:-1px;height:1px}
+.fbar i{display:block;height:3px;background:var(--ink);margin-top:-1px;transition:width .2s}
+.file.ready .fbar,.file.error .fbar{display:none}
+.field{margin-top:var(--s7)}
+.field-head{display:flex;justify-content:space-between;gap:var(--s4);margin-bottom:var(--s3)}
+textarea{display:block;width:100%;min-height:132px;resize:vertical;font-family:var(--serif);font-size:1.12rem;
+line-height:1.65;color:var(--ink);background:var(--linen);border:1px solid var(--rule);padding:var(--s4) var(--s5);
+border-radius:0;transition:border-color .2s,box-shadow .2s}
+textarea::placeholder{color:var(--slate);font-style:italic}
+textarea:focus{outline:none;border-color:var(--ink);box-shadow:0 0 0 3px rgba(25,24,23,.06)}
+.chips{display:flex;flex-wrap:wrap;gap:var(--s2);margin-top:var(--s3)}
+.chip{font-family:var(--sans);font-size:11.5px;line-height:1.3;color:var(--ink-soft);background:transparent;
+border:1px solid var(--rule);border-radius:999px;padding:5px 12px;cursor:pointer;
+transition:background-color .2s,color .2s,border-color .2s}
+.chip:hover{background:var(--ink);color:var(--linen);border-color:var(--ink)}
+.opts{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:var(--s5);margin-top:var(--s6);
+padding-top:var(--s5);border-top:1px solid var(--rule)}
+fieldset{border:0;min-width:0}
+.seg{display:inline-flex;margin-top:var(--s2);border:1px solid var(--ink);position:relative}
+.seg label{cursor:pointer}
+.seg input{position:absolute;opacity:0;pointer-events:none}
+.seg span{display:block;min-width:46px;text-align:center;padding:6px 14px;font-family:var(--sans);font-size:12px;
+font-weight:600;font-variant-numeric:tabular-nums;transition:background-color .2s,color .2s}
+.seg label+label span{border-left:1px solid var(--ink)}
+.seg input:checked+span{background:var(--ink);color:var(--linen)}
+.seg input:focus-visible+span{outline:1px solid var(--ink);outline-offset:2px}
+.check{position:relative;display:inline-flex;align-items:center;gap:var(--s3);cursor:pointer;font-family:var(--sans);
+font-size:12.5px;color:var(--ink-soft)}
+.check input{position:absolute;opacity:0}
+.check .box{width:16px;height:16px;border:1px solid var(--ink);display:inline-block;position:relative;flex:none}
+.check input:checked+.box::after{content:"";position:absolute;inset:3px;background:var(--ink)}
+.check input:focus-visible+.box{outline:1px solid var(--ink);outline-offset:2px}
+.check em{color:var(--slate);font-style:normal}
+.actions{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s4) var(--s5);margin-top:var(--s6)}
+.go{display:inline-flex;align-items:center;gap:var(--s4);font-family:var(--sans);font-size:11px;font-weight:600;
+letter-spacing:.18em;text-transform:uppercase;color:var(--linen);background:var(--ink);border:1px solid var(--ink);
+padding:var(--s4) var(--s6);cursor:pointer;transition:background-color .3s var(--ease),color .3s var(--ease)}
+.go i{font-style:normal;transition:transform .3s var(--ease)}
+.go:hover:not(:disabled){background:transparent;color:var(--ink)}
+.go:hover:not(:disabled) i{transform:translateX(5px)}
+.go:disabled{opacity:.35;cursor:not-allowed}
+.hint{font-family:var(--sans);font-size:12px;line-height:1.55;color:var(--slate);flex:1;min-width:14rem}
+.run,.viewer{margin-top:var(--s9);border-top:1px solid var(--ink);padding-top:var(--s6);position:relative}
+.run::before,.viewer::before{content:"";position:absolute;top:-2px;left:0;width:48px;height:3px;background:var(--ink)}
+.run-head,.viewer-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s4);flex-wrap:wrap}
+.stages{list-style:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--gutter);margin-top:var(--s6)}
+.stages li{padding-top:var(--s3);border-top:1px solid var(--rule);color:var(--slate);
+transition:color .3s,border-color .3s}
+.stages li b{display:block;margin-top:var(--s1);font-weight:400;font-size:1.35rem;line-height:1.2;color:inherit}
+.stages li.done{color:var(--ink);border-top-color:var(--ink)}
+.stages li.active{color:var(--ink);border-top:3px solid var(--ink);margin-top:-2px}
+.stages li.active b{font-style:italic}
+.bar{height:1px;background:var(--rule);margin-top:var(--s6);position:relative}
+.bar i{position:absolute;left:0;top:-1px;height:3px;background:var(--ink);width:0;transition:width .5s var(--ease)}
+.run-msg{margin-top:var(--s4);font-family:var(--sans);font-size:12.5px;line-height:1.6;color:var(--ink-soft);
+overflow-wrap:anywhere}
+.links{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s5);align-items:center}
+.links a,.links button{font-family:var(--sans);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+font-weight:500;color:var(--ink);text-decoration:none;background:none;border:0;border-bottom:1px solid var(--ink);
+padding:0 0 2px;cursor:pointer;transition:color .2s,border-color .2s}
+.links a:hover,.links button:hover{color:var(--slate);border-color:var(--slate)}
+.warn-line{margin-top:var(--s4);font-family:var(--sans);font-size:12px;color:var(--slate)}
+iframe{display:block;width:100%;height:min(86vh,1200px);margin-top:var(--s5);border:1px solid var(--rule);
+background:var(--linen)}
+[hidden]{display:none!important}
+footer{margin-top:var(--s9);padding-top:var(--s6);border-top:1px solid var(--ink);position:relative}
+footer::before{content:"";position:absolute;top:-2px;left:0;width:48px;height:3px;background:var(--ink)}
+footer p{max-width:72ch;font-family:var(--sans);font-size:12px;line-height:1.75;color:var(--slate)}
+@media(max-width:960px){
+.topbar .mid{display:none}.topbar .end{grid-column:1/13;justify-content:flex-start;margin-top:var(--s3)}
+.topbar .wm{grid-column:1/13}
+.studio{margin-top:var(--s8)}.steps,.panel{grid-column:1/13}.steps{padding:0 0 var(--s7)}
+.panel{padding:var(--s5)}.drop{padding:var(--s7) var(--s4)}
+.stages{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:var(--s5)}
+.file{column-gap:var(--s3)}.steps li{grid-template-columns:4.2rem minmax(0,1fr)}
+.run,.viewer{margin-top:var(--s8)}iframe{height:80vh}}
+"""
+
+APP_BODY = r"""
+<div class="page">
+<div class="topbar grid"><span class="label wm">&Eacute;tude</span>
+<span class="label mid">Local &middot; Offline &middot; Reading room</span>
+<span class="end" id="pills"></span></div>
+<header class="hero grid"><h1>Ask the page</h1>
+<p class="label stamp"><b>Try it out</b>Drop &middot; Ask &middot; Read</p>
+<p class="sub">Drop in a paper or a syllabus and ask it anything. Every answer comes back with the page, paragraph and section it was found on.</p></header>
+
+<div class="studio grid">
+<aside class="steps">
+<ol>
+<li><span class="qn">01<i>//</i></span><div><h3>Drop</h3><p>PDF papers or syllabi, up to <span id="maxmb">100</span> MB each. Text-based PDFs only; scans need OCR first.</p></div></li>
+<li><span class="qn">02<i>//</i></span><div><h3>Ask</h3><p>One question per line, or leave it blank for sensible defaults.</p></div></li>
+<li><span class="qn">03<i>//</i></span><div><h3>Read</h3><p>A typeset report: page, paragraph, section heading, the exact quote and a match score.</p></div></li>
+</ol>
+<div class="privacy notched"><p class="label">Private by construction</p>
+<p>This page is served from 127.0.0.1 and talks only to your local Ollama. No accounts, no credits, no external requests. Uploaded files are deleted as soon as each run finishes.</p></div>
+</aside>
+
+<section class="panel notched" aria-label="Upload and ask">
+<label class="drop notched" id="drop" for="pick" tabindex="0">
+<span class="plus" aria-hidden="true"></span>
+<span class="drop-title">Drop PDFs here</span>
+<span class="label">or click to browse</span>
+</label>
+<input id="pick" type="file" accept="application/pdf,.pdf" multiple hidden>
+<ul class="files" id="files" aria-live="polite"></ul>
+
+<div class="field">
+<div class="field-head"><label class="label" for="qs">Questions // optional</label><span class="label" id="qcount"></span></div>
+<textarea id="qs" rows="4" placeholder="One question per line. Leave blank for default questions suited to papers and syllabi."></textarea>
+<div class="chips" id="chips"></div>
+</div>
+
+<div class="opts">
+<fieldset><legend class="label">Passages per question</legend>
+<div class="seg" role="radiogroup">
+<label><input type="radio" name="k" value="3"><span>3</span></label>
+<label><input type="radio" name="k" value="5" checked><span>5</span></label>
+<label><input type="radio" name="k" value="8"><span>8</span></label>
+</div></fieldset>
+<label class="check"><input type="checkbox" id="nollm"><span class="box"></span><span>Retrieval only <em>(skip the language model)</em></span></label>
+</div>
+
+<div class="actions">
+<button class="go" id="go" type="button" disabled><span>Analyse</span><i>&rarr;</i></button>
+<p class="hint" id="hint"></p>
+</div>
+</section>
+</div>
+
+<section class="run" id="run" hidden aria-live="polite">
+<div class="run-head"><p class="label">Reading // in progress</p><span class="status" id="runstatus"><i></i>Working</span></div>
+<ol class="stages" id="stages"></ol>
+<div class="bar"><i id="barfill"></i></div>
+<p class="run-msg" id="runmsg"></p>
+</section>
+
+<section class="viewer" id="viewer" hidden>
+<div class="viewer-head"><p class="label">Report // ready</p>
+<div class="links"><a id="open" target="_blank" rel="noopener">Open full report &#8599;</a>
+<a id="dlhtml" download>report.html</a><a id="dlmd" download>RESULTS.md</a>
+<button type="button" id="again">Analyse another</button></div></div>
+<div class="warn-line" id="skipped" hidden></div>
+<iframe id="frame" title="&Eacute;tude report" sandbox="allow-same-origin"></iframe>
+</section>
+
+<footer><p>Produced offline by pdf_analyzer.py. Nothing on this page loads from the network; the report you generate is a single self-contained file you can keep, print or share.</p></footer>
+</div>
+"""
+
+APP_JS = r"""
+(() => {
+"use strict";
+const $ = (s) => document.querySelector(s);
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
+const pad = (n) => String(n).padStart(2, "0");
+const fmtSize = (b) => b < 1048576 ? Math.max(1, Math.round(b / 1024)) + " KB" : (b / 1048576).toFixed(1) + " MB";
+const SUGGEST = ["What is the main contribution?", "Which methods and data are used?",
+  "What limitations do the authors acknowledge?", "How is the final grade calculated?",
+  "What are the key deadlines and policies?"];
+const STAGES = [["reading", "Read"], ["embedding", "Embed"], ["answering", "Answer"], ["composing", "Typeset"]];
+const S = { files: [], status: null, busy: false, maxMB: 100 };
+
+const drop = $("#drop"), pick = $("#pick"), list = $("#files"), qs = $("#qs"), go = $("#go"), hint = $("#hint"),
+  nollm = $("#nollm"), pills = $("#pills"), runBox = $("#run"), viewer = $("#viewer");
+
+/* ---------- status pills ---------- */
+function pill(text, kind) { const s = el("span", "status " + kind); s.append(el("i")); s.append(document.createTextNode(text)); return s; }
+function renderStatus() {
+  pills.replaceChildren();
+  const s = S.status;
+  if (!s) { pills.append(pill("Server unreachable", "warn")); return; }
+  pills.append(pill(s.online ? "Ollama online" : "Ollama offline", s.online ? "ok" : "warn"));
+  if (s.online) {
+    pills.append(pill(s.model + (s.chat_ok ? " ready" : " missing"), s.chat_ok ? "ok" : "warn"));
+    pills.append(s.embed_ok ? pill(s.embed_model + " ready", "ok")
+      : s.fallback ? pill("embeddings via " + s.model, "") : pill(s.embed_model + " missing", "warn"));
+  }
+  $("#maxmb").textContent = s.max_upload_mb;
+}
+async function loadStatus() {
+  try { const r = await fetch("/api/status", { cache: "no-store" }); S.status = await r.json(); S.maxMB = S.status.max_upload_mb || S.maxMB; }
+  catch (_) { S.status = null; }
+  renderStatus(); renderGo();
+}
+
+/* ---------- files ---------- */
+function addFiles(items) {
+  for (const f of items) {
+    const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+    const e = { file: f, name: f.name, size: f.size, state: "uploading", pct: 0, id: null, pages: null, error: "" };
+    if (!isPdf) { e.state = "error"; e.error = "Only PDF files are supported"; }
+    else if (f.size > S.maxMB * 1048576) { e.state = "error"; e.error = "Larger than " + S.maxMB + " MB"; }
+    else if (S.files.filter((x) => x.state !== "error").length >= 8) { e.state = "error"; e.error = "At most 8 files per run"; }
+    S.files.push(e);
+    if (e.state === "uploading") upload(e);
+  }
+  render();
+}
+function upload(e) {
+  const x = new XMLHttpRequest(); e.xhr = x;
+  x.open("POST", "/api/upload");
+  x.setRequestHeader("X-Filename", encodeURIComponent(e.name));
+  x.setRequestHeader("Content-Type", "application/pdf");
+  x.upload.onprogress = (ev) => { if (ev.lengthComputable) { e.pct = ev.loaded / ev.total; renderFiles(); } };
+  x.onload = () => {
+    let j = {}; try { j = JSON.parse(x.responseText); } catch (_) {}
+    if (x.status === 200) { e.state = "ready"; e.id = j.id; e.pages = j.pages; e.name = j.name || e.name; e.pct = 1; }
+    else { e.state = "error"; e.error = j.error || "Upload failed"; }
+    render();
+  };
+  x.onerror = () => { if (e.state !== "removed") { e.state = "error"; e.error = "Upload failed"; render(); } };
+  x.send(e.file);
+}
+function removeFile(e) {
+  if (e.state === "uploading" && e.xhr) { e.state = "removed"; e.xhr.abort(); }
+  if (e.state === "ready" && e.id) fetch("/api/upload/" + e.id, { method: "DELETE" }).catch(() => {});
+  S.files = S.files.filter((x) => x !== e); render();
+}
+function renderFiles() {
+  list.replaceChildren();
+  S.files.forEach((f, i) => {
+    const li = el("li", "file " + f.state);
+    li.append(el("span", "label", pad(i + 1)));
+    const main = el("div"); main.append(el("span", "fname", f.name));
+    main.append(el("span", "fmeta", f.state === "error" ? f.error : [f.pages ? f.pages + (f.pages === 1 ? " page" : " pages") : null, fmtSize(f.size)].filter(Boolean).join(" · ")));
+    li.append(main);
+    li.append(f.state === "uploading" ? pill(Math.round(f.pct * 100) + "%", "") : f.state === "ready" ? pill("Ready", "ok") : pill("Error", "warn"));
+    const rm = el("button", "rm", "×"); rm.type = "button"; rm.setAttribute("aria-label", "Remove " + f.name); rm.onclick = () => removeFile(f); li.append(rm);
+    const bar = el("span", "fbar"); const fill = el("i"); fill.style.width = Math.round(f.pct * 100) + "%"; bar.append(fill); li.append(bar);
+    list.append(li);
+  });
+}
+
+/* ---------- go button ---------- */
+function questions() { return qs.value.split("\n").map((l) => l.trim()).filter(Boolean); }
+function blocker() {
+  const s = S.status;
+  if (S.busy) return "Working…";
+  if (!s) return "Cannot reach the local server.";
+  if (!s.online) return "Ollama is not running. Start it with: ollama serve";
+  if (!nollm.checked && !s.chat_ok) return "Model missing. Run: ollama pull " + s.model;
+  if (!s.embed_ok && !s.fallback) return "Embedding model missing. Run: ollama pull " + s.embed_model;
+  if (S.files.some((f) => f.state === "uploading")) return "Uploading…";
+  if (!S.files.some((f) => f.state === "ready")) return "Add at least one PDF to begin.";
+  return "";
+}
+function renderGo() {
+  const b = blocker();
+  go.disabled = !!b || S.busy;
+  const n = questions().length;
+  $("#qcount").textContent = n ? n + (n === 1 ? " question" : " questions") : "defaults";
+  const s = S.status;
+  if (!b && s && !s.embed_ok && s.fallback) hint.textContent = "Ready. Tip: ollama pull " + s.embed_model + " for sharper retrieval.";
+  else hint.textContent = b || "Ready. Runs entirely on this machine.";
+}
+function render() { renderFiles(); renderGo(); }
+
+/* ---------- analysis ---------- */
+function buildStages() {
+  const ol = $("#stages"); ol.replaceChildren();
+  STAGES.forEach(([key, name], i) => { const li = el("li"); li.dataset.key = key; li.append(el("span", "label", pad(i + 1) + " //")); li.append(el("b", "", name)); ol.append(li); });
+}
+function renderProgress(j) {
+  const idx = STAGES.findIndex(([k]) => k === j.stage);
+  document.querySelectorAll("#stages li").forEach((li, i) => {
+    li.className = j.state === "done" || i < idx ? "done" : i === idx ? "active" : "";
+  });
+  $("#barfill").style.width = Math.max(2, Math.min(100, j.pct)) + "%";
+  $("#runmsg").textContent = j.message || "";
+}
+async function analyse() {
+  if (S.busy) return;
+  const ready = S.files.filter((f) => f.state === "ready");
+  S.busy = true; renderGo();
+  viewer.hidden = true; runBox.hidden = false; runBox.classList.remove("error");
+  buildStages(); $("#barfill").style.width = "2%"; $("#runmsg").textContent = "Starting…";
+  const st = $("#runstatus"); st.className = "status"; st.replaceChildren(el("i"), document.createTextNode("Working"));
+  runBox.scrollIntoView({ behavior: "smooth", block: "start" });
+  try {
+    const body = { files: ready.map((f) => f.id), questions: questions(), no_llm: nollm.checked,
+      top_k: parseInt(document.querySelector("input[name=k]:checked").value, 10) };
+    const r = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Request failed");
+    S.files = S.files.filter((f) => f.state !== "ready");   // the server deletes them after the run
+    render();
+    await poll(j.job);
+  } catch (err) { fail(String(err.message || err)); }
+  S.busy = false; renderGo();
+}
+function fail(msg) {
+  runBox.classList.add("error");
+  const st = $("#runstatus"); st.className = "status warn"; st.replaceChildren(el("i"), document.createTextNode("Stopped"));
+  $("#runmsg").textContent = msg;
+}
+async function poll(id) {
+  for (;;) {
+    const r = await fetch("/api/job/" + id, { cache: "no-store" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Lost track of the job");
+    renderProgress(j);
+    if (j.state === "done") { showReport(j); return; }
+    if (j.state === "error") { fail(j.error || "Analysis failed"); return; }
+    await new Promise((res) => setTimeout(res, 600));
+  }
+}
+function showReport(j) {
+  const base = "/report/" + j.id + "/";
+  $("#frame").src = base + "report.html";
+  $("#open").href = base + "report.html";
+  $("#dlhtml").href = base + "report.html?download=1";
+  $("#dlmd").href = base + "RESULTS.md?download=1";
+  const sk = $("#skipped");
+  if (j.skipped && j.skipped.length) { sk.hidden = false; sk.textContent = "† Skipped (no extractable text, scanned?): " + j.skipped.join(", "); } else sk.hidden = true;
+  const st = $("#runstatus"); st.className = "status ok"; st.replaceChildren(el("i"), document.createTextNode("Done"));
+  viewer.hidden = false;
+  setTimeout(() => viewer.scrollIntoView({ behavior: "smooth", block: "start" }), 250);
+}
+
+/* ---------- wiring ---------- */
+SUGGEST.forEach((t) => { const b = el("button", "chip", t); b.type = "button"; b.onclick = () => {
+  if (!questions().includes(t)) qs.value = (qs.value.trim() ? qs.value.trim() + "\n" : "") + t; renderGo(); qs.focus(); }; $("#chips").append(b); });
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("on"); }));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("on"); }));
+drop.addEventListener("drop", (e) => { if (e.dataTransfer && e.dataTransfer.files.length) addFiles(Array.from(e.dataTransfer.files)); });
+drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick.click(); } });
+pick.addEventListener("change", () => { addFiles(Array.from(pick.files)); pick.value = ""; });
+// a missed drop must not navigate the tab to the PDF
+["dragover", "drop"].forEach((ev) => window.addEventListener(ev, (e) => e.preventDefault()));
+qs.addEventListener("input", renderGo); nollm.addEventListener("change", renderGo);
+go.addEventListener("click", analyse);
+$("#again").addEventListener("click", () => { viewer.hidden = true; runBox.hidden = true; window.scrollTo({ top: 0, behavior: "smooth" }); });
+render(); loadStatus(); setInterval(loadStatus, 15000);
+})();
+"""
+
+APP_PAGE = (
+    '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+    '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    '<meta name="color-scheme" content="light"><link rel="icon" href="data:,">'
+    "<title>Étude — Ask the page</title><style>" + TOKENS + LAYOUT + APP_CSS + "</style></head><body>"
+    + APP_BODY + '<script nonce="__NONCE__">' + APP_JS + "</script></body></html>")
+
+
+def safe_pdf_name(raw: str) -> str:
+    name = Path(raw.replace("\\", "/")).name
+    stem = re.sub(r"[^\w.\- ()\[\]]+", "_", Path(name).stem).strip(" ._") or "document"
+    return stem[:100] + ".pdf"
+
+
+def pdf_page_count(path: Path) -> int:
+    try:
+        with fitz.open(str(path)) as doc:
+            if getattr(doc, "needs_pass", False):
+                raise ValueError("Password-protected PDFs are not supported")
+            return int(doc.page_count)
+    except ValueError:
+        raise
+    except Exception:
+        raise ValueError("Could not read this PDF (corrupt or unsupported)") from None
+
+
+class Job:
+    def __init__(self):
+        self.id = uuid.uuid4().hex
+        self.state, self.stage, self.pct = "queued", "reading", 0.0
+        self.message, self.error, self.skipped = "Waiting for the reader", "", []
+        self.created = time.time()
+
+    def set(self, stage=None, message=None, pct=None):
+        if stage is not None:
+            self.stage = stage
+        if message is not None:
+            self.message = message
+        if pct is not None:
+            self.pct = round(max(0.0, min(100.0, float(pct))), 1)
+
+    def public(self) -> dict:
+        d = {"id": self.id, "state": self.state, "stage": self.stage, "pct": self.pct,
+             "message": self.message, "error": self.error, "skipped": list(self.skipped)}
+        return d
+
+
+class WebState:
+    def __init__(self, args, workdir: Path):
+        self.args = args
+        self.client = ollama.Client(host=args.host)
+        self.status_client = ollama.Client(host=args.host, timeout=3)
+        self.workdir = workdir
+        self.uploads = workdir / "uploads"
+        self.reports = workdir / "reports"
+        self.max_mb = int(args.max_upload_mb)
+        self.max_bytes = self.max_mb * 1024 * 1024
+        self.jobs: dict = {}
+        self.run_lock = threading.Lock()
+        self.hosts: set = set()
+        self.origins: set = set()
+        self.port = 0
+
+    def bind(self, port: int):
+        self.port = port
+        self.hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        self.origins = {f"http://{h}" for h in self.hosts}
+
+    def status(self) -> dict:
+        a = self.args
+        st = ollama_status(self.status_client, a.model, a.embed_model)
+        return {"online": st["online"], "model": a.model, "embed_model": a.embed_model,
+                "chat_ok": st["chat_ok"], "embed_ok": st["embed_ok"], "fallback": st["fallback"],
+                "max_upload_mb": self.max_mb}
+
+    def new_job(self) -> Job:
+        job = Job()
+        self.jobs[job.id] = job
+        for old in sorted(self.jobs.values(), key=lambda j: j.created)[:-KEEP_JOBS]:
+            self.jobs.pop(old.id, None)
+            shutil.rmtree(self.reports / old.id, ignore_errors=True)
+        return job
+
+    def upload_path(self, uid: str):
+        d = self.uploads / uid
+        found = sorted(d.glob("*.pdf")) if d.is_dir() else []
+        return found[0] if found else None
+
+    def run_job(self, job: Job, ids, paths, questions, top_k: int, no_llm: bool):
+        with self.run_lock:
+            job.state = "running"
+            job.set("reading", "Opening the documents", 1)
+            try:
+                run = self._analyse(job, paths, questions, top_k, no_llm)
+                out = self.reports / job.id
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "RESULTS.md").write_text(render_markdown(run), encoding="utf-8")
+                (out / "report.html").write_text(render_html(run), encoding="utf-8")
+                job.skipped = list(run.skipped)
+                job.set("composing", "Report ready", 100)
+                job.state = "done"
+            except EtudeError as exc:
+                job.error, job.state = str(exc), "error"
+            except Exception as exc:  # surface anything unexpected to the page, never to a stack trace
+                job.error, job.state = f"{type(exc).__name__}: {exc}", "error"
+            finally:
+                for uid in ids:
+                    shutil.rmtree(self.uploads / uid, ignore_errors=True)
+
+    def _analyse(self, job: Job, paths, questions, top_k: int, no_llm: bool) -> Run:
+        a = argparse.Namespace(**vars(self.args))
+        a.question, a.interactive, a.top_k, a.no_llm = list(questions), False, top_k, no_llm
+        embed_model = resolve_models(self.client, a.model, a.embed_model, no_llm, host=a.host)
+        col = open_collection(a.db, embed_model)
+        emb = Embedder(self.client, embed_model)
+        n = len(paths)
+        docs, skipped = [], []
+        for i, pdf in enumerate(paths):
+            lo, hi = i / n * 55, (i + 1) / n * 55
+            job.set("reading", f"Reading {pdf.name}", lo + 1)
+
+            def on_progress(done, total, name=pdf.name, lo=lo, hi=hi):
+                job.set("embedding", f"Embedding {name} · {done}/{total} passages",
+                        lo + (hi - lo) * done / max(total, 1))
+
+            info = ingest(pdf, col, emb, a.kind, a.keep_references, a.reindex, on_progress)
+            if info.chunks:
+                docs.append(info)
+            else:
+                skipped.append(pdf.name)
+        if not docs:
+            raise EtudeError("No extractable text was found. Scanned PDFs need OCR first (for example with ocrmypdf).")
+        ctx = Ctx(col, emb, self.client, a.model, a.top_k, a.min_score, a.no_llm, quiet=True)
+        plan = plan_questions(a, docs)
+        qas = []
+        for i, (q, kind, ids) in enumerate(plan):
+            job.set("answering", f"Question {i + 1} of {len(plan)}", 55 + 40 * i / len(plan))
+            qas.append(answer_question(q, kind, ids, ctx))
+        job.set("composing", "Typesetting the report", 97)
+        return Run(datetime.now(), a.model, embed_model, not no_llm, top_k, docs, qas, skipped)
+
+
+def make_handler(state: WebState):
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "Etude"
+        sys_version = ""
+
+        def log_message(self, *args):  # keep the terminal quiet
+            pass
+
+        # -- plumbing ---------------------------------------------------------
+        def _send(self, status: int, body: bytes, ctype: str, extra=None):
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def _json(self, obj, status: int = 200):
+            self._send(status, json.dumps(obj).encode("utf-8"), "application/json; charset=utf-8")
+
+        def _guard(self, mutating: bool) -> bool:
+            """Reject DNS-rebinding (bad Host) and cross-site writes (bad Origin)."""
+            if (self.headers.get("Host") or "").lower() not in state.hosts:
+                self._json({"error": "Forbidden host"}, 403)
+                return False
+            if mutating:
+                origin = self.headers.get("Origin")
+                if (origin and origin.lower() not in state.origins) or \
+                        self.headers.get("Sec-Fetch-Site") == "cross-site":
+                    self._json({"error": "Forbidden origin"}, 403)
+                    return False
+            return True
+
+        def _body(self, limit: int):
+            try:
+                n = int(self.headers.get("Content-Length", ""))
+            except ValueError:
+                self._json({"error": "Content-Length required"}, 411)
+                return None
+            if n < 0 or n > limit:
+                self.close_connection = True
+                self._json({"error": "Request too large"}, 413)
+                return None
+            return self.rfile.read(n)
+
+        # -- GET --------------------------------------------------------------
+        def do_GET(self):
+            if not self._guard(False):
+                return
+            path = urlparse(self.path)
+            route = path.path
+            if route == "/":
+                nonce = secrets.token_urlsafe(16)
+                csp = (f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'; img-src data:; "
+                       "connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; "
+                       "frame-ancestors 'none'")
+                return self._send(200, APP_PAGE.replace("__NONCE__", nonce).encode("utf-8"),
+                                  "text/html; charset=utf-8", {"Content-Security-Policy": csp})
+            if route == "/api/status":
+                return self._json(state.status())
+            m = re.fullmatch(r"/api/job/([0-9a-f]{32})", route)
+            if m:
+                job = state.jobs.get(m.group(1))
+                return self._json(job.public() if job else {"error": "Unknown job"}, 200 if job else 404)
+            m = re.fullmatch(r"/report/([0-9a-f]{32})/(report\.html|RESULTS\.md)", route)
+            if m:
+                f = state.reports / m.group(1) / m.group(2)
+                if not f.is_file():
+                    return self._json({"error": "Not found"}, 404)
+                html_ = m.group(2).endswith(".html")
+                extra = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+                                                    "frame-ancestors 'self'",
+                         "X-Frame-Options": "SAMEORIGIN"}
+                if "download=1" in (path.query or ""):
+                    extra["Content-Disposition"] = f'attachment; filename="etude-{m.group(2)}"'
+                ctype = "text/html; charset=utf-8" if html_ else "text/plain; charset=utf-8"
+                return self._send(200, f.read_bytes(), ctype, extra)
+            if route == "/favicon.ico":
+                return self._send(204, b"", "image/x-icon")
+            return self._json({"error": "Not found"}, 404)
+
+        do_HEAD = do_GET
+
+        # -- POST / DELETE ----------------------------------------------------
+        def do_POST(self):
+            if not self._guard(True):
+                return
+            route = urlparse(self.path).path
+            if route == "/api/upload":
+                return self._upload()
+            if route == "/api/analyze":
+                return self._analyze()
+            return self._json({"error": "Not found"}, 404)
+
+        def do_DELETE(self):
+            if not self._guard(True):
+                return
+            m = re.fullmatch(r"/api/upload/([0-9a-f]{32})", urlparse(self.path).path)
+            if not m:
+                return self._json({"error": "Not found"}, 404)
+            shutil.rmtree(state.uploads / m.group(1), ignore_errors=True)
+            return self._json({"ok": True})
+
+        def _upload(self):
+            try:
+                length = int(self.headers.get("Content-Length", ""))
+            except ValueError:
+                return self._json({"error": "Content-Length required"}, 411)
+            if length <= 0:
+                return self._json({"error": "The file is empty"}, 400)
+            if length > state.max_bytes:
+                self.close_connection = True
+                return self._json({"error": f"File is larger than {state.max_mb} MB"}, 413)
+            name = safe_pdf_name(unquote(self.headers.get("X-Filename", "document.pdf")))
+            uid = uuid.uuid4().hex
+            d = state.uploads / uid
+            d.mkdir(parents=True, exist_ok=True)
+            dest = d / name
+            try:
+                remaining, first = length, True
+                with open(dest, "wb") as fh:
+                    while remaining:
+                        chunk = self.rfile.read(min(1 << 20, remaining))
+                        if not chunk:
+                            raise ValueError("Upload interrupted")
+                        if first:
+                            if b"%PDF-" not in chunk[:1024]:
+                                raise ValueError("That does not look like a PDF file")
+                            first = False
+                        fh.write(chunk)
+                        remaining -= len(chunk)
+                pages = pdf_page_count(dest)
+            except Exception as exc:
+                shutil.rmtree(d, ignore_errors=True)
+                self.close_connection = True
+                return self._json({"error": str(exc)}, 400)
+            return self._json({"id": uid, "name": name, "size": length, "pages": pages})
+
+        def _analyze(self):
+            raw = self._body(64 * 1024)
+            if raw is None:
+                return
+            try:
+                data = json.loads(raw.decode("utf-8"))
+                assert isinstance(data, dict)
+            except Exception:
+                return self._json({"error": "Invalid request"}, 400)
+            ids = data.get("files")
+            if (not isinstance(ids, list) or not 1 <= len(ids) <= MAX_FILES_PER_RUN
+                    or not all(isinstance(i, str) and SAFE_ID.match(i) for i in ids) or len(set(ids)) != len(ids)):
+                return self._json({"error": "Choose between 1 and 8 uploaded files"}, 400)
+            paths = [state.upload_path(i) for i in ids]
+            if not all(paths):
+                return self._json({"error": "An uploaded file is no longer available. Add it again."}, 400)
+            qs = data.get("questions", [])
+            if not isinstance(qs, list):
+                return self._json({"error": "Invalid questions"}, 400)
+            questions = [q.strip()[:500] for q in qs if isinstance(q, str) and q.strip()][:MAX_QUESTIONS]
+            try:
+                top_k = max(1, min(12, int(data.get("top_k", 5))))
+            except (TypeError, ValueError):
+                top_k = 5
+            no_llm = bool(data.get("no_llm", False))
+            job = state.new_job()
+            threading.Thread(target=state.run_job, args=(job, ids, paths, questions, top_k, no_llm),
+                             daemon=True).start()
+            return self._json({"job": job.id})
+
+    return Handler
+
+
+def start_server(args):
+    """Bind the loopback server (does not block). Returns (httpd, state)."""
+    args.host = normalise_host(args.host)
+    workdir = Path(args.workdir)
+    shutil.rmtree(workdir / "uploads", ignore_errors=True)        # stale uploads from a crashed run
+    (workdir / "uploads").mkdir(parents=True, exist_ok=True)
+    (workdir / "reports").mkdir(parents=True, exist_ok=True)
+    state = WebState(args, workdir)
+    try:
+        httpd = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(state))
+    except OSError as exc:
+        raise EtudeError(f"Cannot listen on 127.0.0.1:{args.port} ({exc}). Try --port {args.port + 1}.") from None
+    httpd.daemon_threads = True
+    state.bind(httpd.server_address[1])
+    return httpd, state
+
+
+def serve(args):
+    httpd, state = start_server(args)
+    url = f"http://127.0.0.1:{state.port}/"
+    console.print(f"\n[bold]ÉTUDE[/bold]  [{SLATE}]reading room[/]\n")
+    console.print(f"  [{SLATE}]open[/]    {url}")
+    console.print(f"  [{SLATE}]model[/]   {escape(args.model)} · {escape(args.embed_model)}")
+    console.print(f"  [{SLATE}]scope[/]   127.0.0.1 only. Uploads are deleted after each run; "
+                  f"reports are kept in {escape(str(state.reports))}")
+    console.print(f"  [{SLATE}]stop[/]    Ctrl+C\n")
+    if args.open:
+        webbrowser.open(url)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        console.print(f"\n[{SLATE}]Closed.[/]")
+    finally:
+        httpd.server_close()
+        shutil.rmtree(state.uploads, ignore_errors=True)
 
 
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(
         prog="pdf_analyzer", description="Offline RAG over research papers and course syllabi.")
-    ap.add_argument("pdfs", nargs="+", type=Path, metavar="PDF")
+    ap.add_argument("pdfs", nargs="*", type=Path, metavar="PDF",
+                    help="PDF files to analyse; omit (or use --serve) to open the web interface")
     ap.add_argument("-q", "--question", action="append", default=[], metavar="TEXT",
                     help="question to ask (repeatable); omit for kind-specific defaults")
     ap.add_argument("-i", "--interactive", action="store_true", help="keep asking questions in a prompt")
@@ -1095,13 +1947,31 @@ def parse_args(argv=None):
     ap.add_argument("--no-llm", action="store_true", help="retrieval and citations only")
     ap.add_argument("--reindex", action="store_true", help="re-embed PDFs even if already indexed")
     ap.add_argument("--keep-references", action="store_true", help="index the bibliography too")
+    web = ap.add_argument_group("web interface")
+    web.add_argument("--serve", action="store_true", help="open the drag-and-drop interface (default when no PDFs are given)")
+    web.add_argument("--port", type=int, default=8501, help="port on 127.0.0.1 (0 picks a free one)")
+    web.add_argument("--open", action="store_true", help="open the interface in your browser")
+    web.add_argument("--workdir", type=Path, default=Path(".etude_web"), help="where uploads and web reports live")
+    web.add_argument("--max-upload-mb", type=int, default=100, help="largest accepted PDF")
     args = ap.parse_args(argv)
     args.top_k = max(1, min(args.top_k, 12))
     return args
 
 
 def main(argv=None):
+    try:
+        _main(argv)
+    except EtudeError as exc:
+        fail(str(exc))
+
+
+def _main(argv=None):
     args = parse_args(argv)
+    if args.serve or not args.pdfs:
+        if args.pdfs:
+            fail("--serve takes no PDF arguments; drop them into the page instead.")
+        serve(args)
+        return
     for p in args.pdfs:
         if not p.is_file() or p.suffix.lower() != ".pdf":
             fail(f"Not a PDF file: {p}")
@@ -1112,17 +1982,24 @@ def main(argv=None):
     col = open_collection(args.db, embed_model)
     emb = Embedder(client, embed_model)
 
-    docs = []
+    docs, skipped = [], []
     progress = Progress(SpinnerColumn(style=SLATE), TextColumn("{task.description}"),
                         BarColumn(bar_width=28, style=SLATE, complete_style="bold", finished_style="bold"),
                         TextColumn("{task.completed}/{task.total}"), console=console, transient=True)
     with progress:
         for pdf in args.pdfs:
+            task = progress.add_task(f"Reading {pdf.name}", total=None)
+
+            def on_progress(done, total, task=task, name=pdf.name):
+                progress.update(task, description=f"Embedding {name}", completed=done, total=total)
+
             try:
-                info = ingest(pdf, col, emb, args, progress)
+                info = ingest(pdf, col, emb, args.kind, args.keep_references, args.reindex, on_progress)
             except Exception as exc:
                 fail(f"Could not index {pdf.name}: {exc}")
+            progress.remove_task(task)
             if info.chunks == 0:
+                skipped.append(pdf.name)
                 console.print(f"[{SLATE}]\u2020 {escape(pdf.name)}: no extractable text "
                               "(scanned PDF?). Run OCR first, e.g. ocrmypdf.[/]")
                 continue
@@ -1161,7 +2038,7 @@ def main(argv=None):
         console.print("No questions were asked; no report written.")
         return
 
-    run = Run(datetime.now(), args.model, embed_model, not args.no_llm, args.top_k, docs, qas)
+    run = Run(datetime.now(), args.model, embed_model, not args.no_llm, args.top_k, docs, qas, skipped)
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "RESULTS.md").write_text(render_markdown(run), encoding="utf-8")
     (args.out / "report.html").write_text(render_html(run), encoding="utf-8")
