@@ -1,6 +1,6 @@
 # ANALYSIS
 
-`Nº 261027-1415` · 27 October 2026 · llama3.2 · nomic-embed-text
+`Nº 261028-1032` · 28 October 2026 · retrieval only · nomic-embed-text
 
 ———
 
@@ -14,9 +14,7 @@
 
 ## 01 — How is grading weighted?
 
-The grading is weighted as follows: the final exam accounts for 40% of the total grade, the group project accounts for 30%, quizzes account for 20%, and attendance accounts for 10%.
-
-*† The answer carries no citation markers; check it against the passages below.*
+Retrieval only: generation was skipped (--no-llm).
 
 ### Evidence
 

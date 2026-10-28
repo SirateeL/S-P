@@ -35,17 +35,14 @@ jobs:
         python -m pip install --upgrade pip
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-    - name: Build Report Output
+    - name: Generate JW Anderson Report
       run: |
         mkdir -p output
-        python pdf_analyzer.py sample_syllabus.pdf -q "How is grading weighted?" || true
-        
-        # Ensure report files are mapped to output directory
+        python pdf_analyzer.py sample_syllabus.pdf -q "How is grading weighted?" --no-llm || true
         if [ -f report.html ]; then cp report.html output/report.html; fi
-        if [ ! -f output/report.html ]; then
-          echo '<!DOCTYPE html><html><head><title>Étude Report</title></head><body><h1>Étude Analysis Engine</h1><p>Report generated successfully.</p></body></html>' > output/report.html
+        if [ -f output/report.html ] && [ ! -f output/index.html ]; then
+          cp output/report.html output/index.html
         fi
-        cp output/report.html output/index.html
 
     - name: Upload Pages Artifact
       uses: actions/upload-pages-artifact@v3
