@@ -1300,6 +1300,15 @@ padding:0 0 2px;cursor:pointer;transition:color .2s,border-color .2s}
 .warn-line{margin-top:var(--s4);font-family:var(--sans);font-size:12px;color:var(--slate)}
 iframe{display:block;width:100%;height:min(86vh,1200px);margin-top:var(--s5);border:1px solid var(--rule);
 background:var(--linen)}
+.preview{margin-bottom:var(--s6);padding:var(--s5) var(--s6);background:var(--linen);border:1px solid var(--rule)}
+.preview p:not(.label){margin-top:var(--s3);font-size:1rem;line-height:1.65;color:var(--ink-soft)}
+.cmd{display:flex;align-items:center;justify-content:space-between;gap:var(--s4);margin-top:var(--s4);padding:var(--s3) var(--s4);border:1px solid var(--ink);background:var(--parchment)}
+.cmd code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:13px;overflow-wrap:anywhere}
+.drop.off{opacity:.5;cursor:not-allowed;pointer-events:none}
+.preview .more{margin-top:var(--s4)}
+.preview .more a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:2px;transition:color .2s,border-color .2s}
+.preview .more a:hover{color:var(--slate);border-color:var(--slate)}
+textarea:disabled{opacity:.6;cursor:not-allowed}
 [hidden]{display:none!important}
 footer{margin-top:var(--s9);padding-top:var(--s6);border-top:1px solid var(--ink);position:relative}
 footer::before{content:"";position:absolute;top:-2px;left:0;width:48px;height:3px;background:var(--ink)}
@@ -1335,6 +1344,12 @@ APP_BODY = r"""
 </aside>
 
 <section class="panel notched" aria-label="Upload and ask">
+<div class="preview notched" id="preview" hidden>
+<p class="label">Static preview // not connected</p>
+<p>This copy is published on GitHub Pages, which can&rsquo;t run Python or Ollama, so uploads are switched off here. To try it for real, run &Eacute;tude on your own computer:</p>
+<div class="cmd"><code id="cmd">python pdf_analyzer.py --serve --open</code><button type="button" id="copycmd" class="chip">Copy</button></div>
+<p class="label more"><a href="report.html">View the sample report &rarr;</a></p>
+</div>
 <label class="drop notched" id="drop" for="pick" tabindex="0">
 <span class="plus" aria-hidden="true"></span>
 <span class="drop-title">Drop PDFs here</span>
@@ -1397,7 +1412,8 @@ const SUGGEST = ["What is the main contribution?", "Which methods and data are u
   "What limitations do the authors acknowledge?", "How is the final grade calculated?",
   "What are the key deadlines and policies?"];
 const STAGES = [["reading", "Read"], ["embedding", "Embed"], ["answering", "Answer"], ["composing", "Typeset"]];
-const S = { files: [], status: null, busy: false, maxMB: 100 };
+const S = { files: [], status: null, busy: false, maxMB: 100,
+  static: !["127.0.0.1", "localhost"].includes(location.hostname) };
 
 const drop = $("#drop"), pick = $("#pick"), list = $("#files"), qs = $("#qs"), go = $("#go"), hint = $("#hint"),
   nollm = $("#nollm"), pills = $("#pills"), runBox = $("#run"), viewer = $("#viewer");
@@ -1407,6 +1423,7 @@ function pill(text, kind) { const s = el("span", "status " + kind); s.append(el(
 function renderStatus() {
   pills.replaceChildren();
   const s = S.status;
+  if (S.static) { pills.append(pill("Static preview", "")); return; }
   if (!s) { pills.append(pill("Server unreachable", "warn")); return; }
   pills.append(pill(s.online ? "Ollama online" : "Ollama offline", s.online ? "ok" : "warn"));
   if (s.online) {
@@ -1417,6 +1434,7 @@ function renderStatus() {
   $("#maxmb").textContent = s.max_upload_mb;
 }
 async function loadStatus() {
+  if (S.static) { S.status = null; renderStatus(); renderGo(); return; }
   try { const r = await fetch("/api/status", { cache: "no-store" }); S.status = await r.json(); S.maxMB = S.status.max_upload_mb || S.maxMB; }
   catch (_) { S.status = null; }
   renderStatus(); renderGo();
@@ -1424,6 +1442,7 @@ async function loadStatus() {
 
 /* ---------- files ---------- */
 function addFiles(items) {
+  if (S.static) return;
   for (const f of items) {
     const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name);
     const e = { file: f, name: f.name, size: f.size, state: "uploading", pct: 0, id: null, pages: null, error: "" };
@@ -1474,6 +1493,7 @@ function renderFiles() {
 function questions() { return qs.value.split("\n").map((l) => l.trim()).filter(Boolean); }
 function blocker() {
   const s = S.status;
+  if (S.static) return "Preview only. To analyse a PDF, run it on your computer (see above).";
   if (S.busy) return "Working…";
   if (!s) return "Cannot reach the local server.";
   if (!s.online) return "Ollama is not running. Start it with: ollama serve";
@@ -1569,6 +1589,18 @@ pick.addEventListener("change", () => { addFiles(Array.from(pick.files)); pick.v
 qs.addEventListener("input", renderGo); nollm.addEventListener("change", renderGo);
 go.addEventListener("click", analyse);
 $("#again").addEventListener("click", () => { viewer.hidden = true; runBox.hidden = true; window.scrollTo({ top: 0, behavior: "smooth" }); });
+if (S.static) {
+  $("#preview").hidden = false; drop.classList.add("off"); drop.removeAttribute("tabindex");
+  pick.disabled = true; qs.disabled = true; nollm.disabled = true;
+  $("#chips").hidden = true;
+  document.querySelector(".privacy p:not(.label)").textContent = "Run on your own computer, this page is served from 127.0.0.1 and talks only to your local Ollama. No accounts, no credits, no external requests. Uploaded files are deleted as soon as each run finishes.";
+  $("#copycmd").addEventListener("click", async () => {
+    const b = $("#copycmd");
+    try { await navigator.clipboard.writeText($("#cmd").textContent); b.textContent = "Copied"; }
+    catch (_) { b.textContent = "Select and copy"; }
+    setTimeout(() => { b.textContent = "Copy"; }, 1800);
+  });
+}
 render(); loadStatus(); setInterval(loadStatus, 15000);
 })();
 """
