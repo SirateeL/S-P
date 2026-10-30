@@ -68,6 +68,10 @@ EMBED_BATCH = 16
 console = Console(highlight=False)
 
 
+class Cancelled(Exception):
+    """Raised inside a web job when the reader presses Cancel."""
+
+
 class EtudeError(Exception):
     """A problem the user can act on (shown plainly, never as a traceback)."""
 
@@ -748,7 +752,7 @@ _GRAIN = ("url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'
 
 TOKENS = r"""
 :root{
---linen:#F5F3EE;--parchment:#EFECE6;--ink:#191817;--slate:#8A857B;--rule:#D3CEC6;--ink-soft:#4A4743;
+--linen:#F5F3EE;--parchment:#EFECE6;--ink:#191817;--slate:#6F6A61;--rule:#C4BEB4;--ink-soft:#4A4743;
 --serif:"Didot","Bodoni MT","Cinzel","Georgia",serif;
 --sans:-apple-system,BlinkMacSystemFont,"Helvetica Neue","Arial",sans-serif;
 --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--s7:48px;--s8:64px;--s9:96px;--s10:128px;
@@ -1034,7 +1038,7 @@ def render_html(run: Run) -> str:
     meta_html = "".join(f"<div><dt>{k}</dt><dd>{e(v)}</dd></div>" for k, v in meta)
     stamp = f"<b>Nº {run.generated:%y%m%d-%H%M}</b>{run.generated:%d %B %Y}"
     swatches = [("#F5F3EE", "Linen"), ("#EFECE6", "Parchment"), ("#191817", "Charcoal"),
-                ("#8A857B", "Slate"), ("#D3CEC6", "Hairline")]
+                ("#6F6A61", "Slate"), ("#C4BEB4", "Hairline")]
     sw = "".join(f'<span><i style="background:{h}"></i>{name} {h[1:]}</span>' for h, name in swatches)
 
     return (
@@ -1309,6 +1313,39 @@ background:var(--linen)}
 .preview .more a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:2px;transition:color .2s,border-color .2s}
 .preview .more a:hover{color:var(--slate);border-color:var(--slate)}
 textarea:disabled{opacity:.6;cursor:not-allowed}
+/* ---- working-surface polish: compact hero, sticky action bar, run controls, history, idle ghost ---- */
+.hero{padding-top:var(--s7)}
+h1{font-size:clamp(3rem,6.4vw,5.8rem);line-height:.9}
+.sub{margin-top:var(--s4);font-size:1.12rem}
+.studio{margin-top:var(--s7)}
+.panel{padding:var(--s6) var(--s7) var(--s7)}
+.drop{padding:var(--s7) var(--s5)}
+.field{margin-top:var(--s6)}
+textarea{min-height:96px}
+.opts{margin-top:var(--s5);padding-top:var(--s4)}
+.actions{position:sticky;bottom:0;z-index:3;margin:var(--s5) calc(-1*var(--s7)) 0;padding:var(--s4) var(--s7);
+background:var(--parchment);border-top:1px solid var(--rule)}
+.static .actions{position:static}
+html{scroll-padding-bottom:96px}
+.hint .chip{margin-left:var(--s3)}
+.run-head .links{gap:var(--s4)}
+.run-head .links button:disabled{opacity:.45;cursor:default}
+.runq{margin-top:var(--s5);font-size:1.3rem;line-height:1.45;font-style:italic;max-width:56ch;text-wrap:pretty}
+.runq:empty{display:none}
+.runtime{margin-top:var(--s3);font-variant-numeric:tabular-nums}
+.recent{margin-top:var(--s8)}
+.recent ol{list-style:none;margin-top:var(--s4);border-top:1px solid var(--ink)}
+.recent li{display:grid;grid-template-columns:8rem minmax(0,1fr) auto;column-gap:var(--gutter);align-items:baseline;
+padding:var(--s4) 0;border-bottom:1px solid var(--rule)}
+.recent .when{font-family:var(--sans);font-size:11.5px;color:var(--slate);font-variant-numeric:tabular-nums}
+.recent .what{font-size:1.05rem;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recent .what small{display:block;font-family:var(--sans);font-size:11.5px;color:var(--slate)}
+.ghost{margin-top:var(--s8);padding:var(--s6);border:1px dashed var(--rule)}
+.gl{height:9px;margin-top:var(--s3);background:var(--rule);opacity:.5}
+.gl.w6{width:60%}.gl.w8{width:80%}.gl.w9{width:90%}.gl.w10{width:100%}
+.gcards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--gutter);margin-top:var(--s5)}
+.gcard{padding:var(--s4);border:1px solid var(--rule)}
+.gcard .status{opacity:.6}
 [hidden]{display:none!important}
 footer{margin-top:var(--s9);padding-top:var(--s6);border-top:1px solid var(--ink);position:relative}
 footer::before{content:"";position:absolute;top:-2px;left:0;width:48px;height:3px;background:var(--ink)}
@@ -1317,7 +1354,11 @@ footer p{max-width:72ch;font-family:var(--sans);font-size:12px;line-height:1.75;
 .topbar .mid{display:none}.topbar .end{grid-column:1/13;justify-content:flex-start;margin-top:var(--s3)}
 .topbar .wm{grid-column:1/13}
 .studio{margin-top:var(--s8)}.steps,.panel{grid-column:1/13}.steps{padding:0 0 var(--s7)}
-.panel{padding:var(--s5)}.drop{padding:var(--s7) var(--s4)}
+.panel{padding:var(--s5);order:-1}.drop{padding:var(--s6) var(--s4)}
+.hero{padding-top:var(--s6)}.studio{margin-top:var(--s6)}
+.actions{margin:var(--s5) calc(-1*var(--s5)) 0;padding:var(--s3) var(--s5)}
+.recent li{grid-template-columns:minmax(0,1fr) auto}.recent .when{grid-column:1/3}
+.gcards{grid-template-columns:1fr}
 .stages{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:var(--s5)}
 .file{column-gap:var(--s3)}.steps li{grid-template-columns:4.2rem minmax(0,1fr)}
 .run,.viewer{margin-top:var(--s8)}iframe{height:80vh}}
@@ -1382,19 +1423,35 @@ APP_BODY = r"""
 </div>
 
 <section class="run" id="run" hidden aria-live="polite">
-<div class="run-head"><p class="label">Reading // in progress</p><span class="status" id="runstatus"><i></i>Working</span></div>
+<div class="run-head"><p class="label">Reading // in progress</p>
+<div class="links"><span class="status" id="runstatus"><i></i>Working</span><button type="button" id="cancel" disabled>Cancel</button></div></div>
 <ol class="stages" id="stages"></ol>
 <div class="bar"><i id="barfill"></i></div>
+<p class="runq" id="runq"></p>
 <p class="run-msg" id="runmsg"></p>
+<p class="label runtime" id="runtime"></p>
 </section>
 
 <section class="viewer" id="viewer" hidden>
-<div class="viewer-head"><p class="label">Report // ready</p>
+<div class="viewer-head"><p class="label" id="vlabel">Report // ready</p>
 <div class="links"><a id="open" target="_blank" rel="noopener">Open full report &#8599;</a>
 <a id="dlhtml" download>report.html</a><a id="dlmd" download>RESULTS.md</a>
 <button type="button" id="again">Analyse another</button></div></div>
 <div class="warn-line" id="skipped" hidden></div>
 <iframe id="frame" title="&Eacute;tude report" sandbox="allow-same-origin"></iframe>
+</section>
+
+<section class="ghost notched" id="ghost" aria-hidden="true">
+<p class="label">Your report // will appear here</p>
+<div class="gl w9"></div><div class="gl w10"></div><div class="gl w6"></div>
+<div class="gcards">
+<div class="gcard"><span class="status"><i></i>Page 3</span><div class="gl w10"></div><div class="gl w8"></div></div>
+<div class="gcard"><span class="status"><i></i>Page 7</span><div class="gl w10"></div><div class="gl w6"></div></div>
+</div></section>
+
+<section class="recent" id="recent" hidden>
+<p class="label">Recent readings // kept on this computer</p>
+<ol id="recentlist"></ol>
 </section>
 
 <footer><p>Produced offline by pdf_analyzer.py. Nothing on this page loads from the network; the report you generate is a single self-contained file you can keep, print or share.</p></footer>
@@ -1412,11 +1469,18 @@ const SUGGEST = ["What is the main contribution?", "Which methods and data are u
   "What limitations do the authors acknowledge?", "How is the final grade calculated?",
   "What are the key deadlines and policies?"];
 const STAGES = [["reading", "Read"], ["embedding", "Embed"], ["answering", "Answer"], ["composing", "Typeset"]];
-const S = { files: [], status: null, busy: false, maxMB: 100,
+const fmtT = (ms) => { const t = Math.max(0, Math.round(ms / 1000)); return Math.floor(t / 60) + ":" + pad(t % 60); };
+const S = { files: [], status: null, busy: false, maxMB: 100, t0: 0, pct: 0, job: null, ticker: null,
   static: !["127.0.0.1", "localhost"].includes(location.hostname) };
 
 const drop = $("#drop"), pick = $("#pick"), list = $("#files"), qs = $("#qs"), go = $("#go"), hint = $("#hint"),
-  nollm = $("#nollm"), pills = $("#pills"), runBox = $("#run"), viewer = $("#viewer");
+  nollm = $("#nollm"), pills = $("#pills"), runBox = $("#run"), viewer = $("#viewer"), ghost = $("#ghost"),
+  cancelBtn = $("#cancel");
+async function copyText(text, btn, label) {
+  try { await navigator.clipboard.writeText(text); btn.textContent = "Copied"; }
+  catch (_) { btn.textContent = "Select and copy"; }
+  setTimeout(() => { btn.textContent = label; }, 1800);
+}
 
 /* ---------- status pills ---------- */
 function pill(text, kind) { const s = el("span", "status " + kind); s.append(el("i")); s.append(document.createTextNode(text)); return s; }
@@ -1503,6 +1567,14 @@ function blocker() {
   if (!S.files.some((f) => f.state === "ready")) return "Add at least one PDF to begin.";
   return "";
 }
+function fixCmd() {
+  const s = S.status;
+  if (S.static || S.busy || !s) return "";
+  if (!s.online) return "ollama serve";
+  if (!nollm.checked && !s.chat_ok) return "ollama pull " + s.model;
+  if (!s.embed_ok && !s.fallback) return "ollama pull " + s.embed_model;
+  return "";
+}
 function renderGo() {
   const b = blocker();
   go.disabled = !!b || S.busy;
@@ -1510,7 +1582,9 @@ function renderGo() {
   $("#qcount").textContent = n ? n + (n === 1 ? " question" : " questions") : "defaults";
   const s = S.status;
   if (!b && s && !s.embed_ok && s.fallback) hint.textContent = "Ready. Tip: ollama pull " + s.embed_model + " for sharper retrieval.";
-  else hint.textContent = b || "Ready. Runs entirely on this machine.";
+  else hint.textContent = b || "Ready. Runs entirely on this machine." + (S.files.length ? " Press Ctrl or Cmd + Enter in the questions box." : "");
+  const cmd = fixCmd();
+  if (cmd) { const c = el("button", "chip", "Copy command"); c.type = "button"; c.onclick = () => copyText(cmd, c, "Copy command"); hint.append(c); }
 }
 function render() { renderFiles(); renderGo(); }
 
@@ -1525,13 +1599,27 @@ function renderProgress(j) {
     li.className = j.state === "done" || i < idx ? "done" : i === idx ? "active" : "";
   });
   $("#barfill").style.width = Math.max(2, Math.min(100, j.pct)) + "%";
-  $("#runmsg").textContent = j.message || "";
+  S.pct = j.pct;
+  $("#runq").textContent = j.stage === "answering" && j.question ? "\u201c" + j.question + "\u201d" : "";
+  $("#runmsg").textContent = j.cancelling ? "Stopping after the current step\u2026" : (j.message || "");
 }
+function tick() {
+  const el_ = Date.now() - S.t0;
+  let t = fmtT(el_) + " elapsed";
+  if (S.pct >= 10 && el_ > 6000) {
+    const left = el_ * (100 - S.pct) / S.pct / 1000;
+    t += left < 60 ? " \u00b7 under a minute left (rough)" : " \u00b7 roughly " + Math.round(left / 60) + " min left";
+  }
+  $("#runtime").textContent = t;
+}
+function startTick() { stopTick(); S.t0 = Date.now(); S.pct = 0; tick(); S.ticker = setInterval(tick, 1000); }
+function stopTick() { if (S.ticker) clearInterval(S.ticker); S.ticker = null; }
 async function analyse() {
   if (S.busy) return;
   const ready = S.files.filter((f) => f.state === "ready");
   S.busy = true; renderGo();
-  viewer.hidden = true; runBox.hidden = false; runBox.classList.remove("error");
+  viewer.hidden = true; ghost.hidden = true; runBox.hidden = false; runBox.classList.remove("error");
+  cancelBtn.disabled = true; cancelBtn.textContent = "Cancel"; $("#runq").textContent = ""; startTick();
   buildStages(); $("#barfill").style.width = "2%"; $("#runmsg").textContent = "Starting…";
   const st = $("#runstatus"); st.className = "status"; st.replaceChildren(el("i"), document.createTextNode("Working"));
   runBox.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1542,10 +1630,18 @@ async function analyse() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || "Request failed");
     S.files = S.files.filter((f) => f.state !== "ready");   // the server deletes them after the run
+    S.job = j.job; cancelBtn.disabled = false;
     render();
     await poll(j.job);
   } catch (err) { fail(String(err.message || err)); }
-  S.busy = false; renderGo();
+  stopTick(); cancelBtn.disabled = true; S.job = null;
+  S.busy = false; renderGo(); loadRecent();
+}
+function cancelled() {
+  const st = $("#runstatus"); st.className = "status warn"; st.replaceChildren(el("i"), document.createTextNode("Cancelled"));
+  $("#runq").textContent = "";
+  $("#runmsg").textContent = "Cancelled. Nothing was saved, and your PDFs were deleted. Add them again to re-run.";
+  ghost.hidden = false;
 }
 function fail(msg) {
   runBox.classList.add("error");
@@ -1560,6 +1656,7 @@ async function poll(id) {
     renderProgress(j);
     if (j.state === "done") { showReport(j); return; }
     if (j.state === "error") { fail(j.error || "Analysis failed"); return; }
+    if (j.state === "cancelled") { cancelled(); return; }
     await new Promise((res) => setTimeout(res, 600));
   }
 }
@@ -1572,11 +1669,41 @@ function showReport(j) {
   const sk = $("#skipped");
   if (j.skipped && j.skipped.length) { sk.hidden = false; sk.textContent = "† Skipped (no extractable text, scanned?): " + j.skipped.join(", "); } else sk.hidden = true;
   const st = $("#runstatus"); st.className = "status ok"; st.replaceChildren(el("i"), document.createTextNode("Done"));
+  if (S.ticker) $("#runtime").textContent = "Finished in " + fmtT(Date.now() - S.t0);
+  $("#vlabel").textContent = "Report // ready"; ghost.hidden = true;
   viewer.hidden = false;
   setTimeout(() => viewer.scrollIntoView({ behavior: "smooth", block: "start" }), 250);
 }
 
+/* ---------- recent readings ---------- */
+async function loadRecent() {
+  if (S.static) return;
+  let list_ = [];
+  try { const r = await fetch("/api/reports", { cache: "no-store" }); list_ = (await r.json()).reports || []; } catch (_) {}
+  const box = $("#recent"), ol = $("#recentlist");
+  ol.replaceChildren(); box.hidden = !list_.length;
+  list_.forEach((r) => {
+    const d = new Date(r.created * 1000), li = el("li");
+    li.append(el("span", "when", d.toLocaleDateString(undefined, { day: "numeric", month: "short" }) + ", " +
+      d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })));
+    const w = el("span", "what", r.files.join(", ") || "Report");
+    w.append(el("small", "", r.questions + (r.questions === 1 ? " question" : " questions")));
+    li.append(w);
+    const links = el("span", "links");
+    const view = el("button", "", "View"); view.type = "button"; view.onclick = () => showReport({ id: r.id });
+    const del = el("button", "", "Remove"); del.type = "button";
+    del.onclick = async () => { try { await fetch("/api/report/" + r.id, { method: "DELETE" }); } catch (_) {} loadRecent(); };
+    links.append(view, del); li.append(links); ol.append(li);
+  });
+}
+
 /* ---------- wiring ---------- */
+cancelBtn.addEventListener("click", async () => {
+  if (!S.job) return;
+  cancelBtn.disabled = true; cancelBtn.textContent = "Stopping\u2026";
+  try { await fetch("/api/job/" + S.job + "/cancel", { method: "POST" }); } catch (_) {}
+});
+qs.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !go.disabled) { e.preventDefault(); analyse(); } });
 SUGGEST.forEach((t) => { const b = el("button", "chip", t); b.type = "button"; b.onclick = () => {
   if (!questions().includes(t)) qs.value = (qs.value.trim() ? qs.value.trim() + "\n" : "") + t; renderGo(); qs.focus(); }; $("#chips").append(b); });
 ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("on"); }));
@@ -1588,20 +1715,24 @@ pick.addEventListener("change", () => { addFiles(Array.from(pick.files)); pick.v
 ["dragover", "drop"].forEach((ev) => window.addEventListener(ev, (e) => e.preventDefault()));
 qs.addEventListener("input", renderGo); nollm.addEventListener("change", renderGo);
 go.addEventListener("click", analyse);
-$("#again").addEventListener("click", () => { viewer.hidden = true; runBox.hidden = true; window.scrollTo({ top: 0, behavior: "smooth" }); });
+$("#again").addEventListener("click", () => { viewer.hidden = true; runBox.hidden = true; ghost.hidden = false; window.scrollTo({ top: 0, behavior: "smooth" }); });
 if (S.static) {
+  document.body.classList.add("static"); ghost.hidden = true;
+  // show the sample report that CI built, right on the page
+  fetch("report.html", { method: "HEAD" }).then((r) => {
+    if (!r.ok) { ghost.hidden = false; return; }
+    $("#frame").src = "report.html"; $("#open").href = "report.html"; $("#dlhtml").href = "report.html";
+    $("#dlmd").hidden = true; $("#again").hidden = true;
+    $("#vlabel").textContent = "Sample report // built from a demo syllabus";
+    viewer.hidden = false;
+  }).catch(() => { ghost.hidden = false; });
   $("#preview").hidden = false; drop.classList.add("off"); drop.removeAttribute("tabindex");
   pick.disabled = true; qs.disabled = true; nollm.disabled = true;
   $("#chips").hidden = true;
   document.querySelector(".privacy p:not(.label)").textContent = "Run on your own computer, this page is served from 127.0.0.1 and talks only to your local Ollama. No accounts, no credits, no external requests. Uploaded files are deleted as soon as each run finishes.";
-  $("#copycmd").addEventListener("click", async () => {
-    const b = $("#copycmd");
-    try { await navigator.clipboard.writeText($("#cmd").textContent); b.textContent = "Copied"; }
-    catch (_) { b.textContent = "Select and copy"; }
-    setTimeout(() => { b.textContent = "Copy"; }, 1800);
-  });
+  $("#copycmd").addEventListener("click", () => copyText($("#cmd").textContent, $("#copycmd"), "Copy"));
 }
-render(); loadStatus(); setInterval(loadStatus, 15000);
+render(); loadStatus(); loadRecent(); setInterval(loadStatus, 15000);
 })();
 """
 
@@ -1636,7 +1767,14 @@ class Job:
         self.id = uuid.uuid4().hex
         self.state, self.stage, self.pct = "queued", "reading", 0.0
         self.message, self.error, self.skipped = "Waiting for the reader", "", []
+        self.question, self.index, self.total = "", 0, 0
+        self.files: list = []
         self.created = time.time()
+        self.cancel = threading.Event()
+
+    def check(self):
+        if self.cancel.is_set():
+            raise Cancelled()
 
     def set(self, stage=None, message=None, pct=None):
         if stage is not None:
@@ -1648,7 +1786,9 @@ class Job:
 
     def public(self) -> dict:
         d = {"id": self.id, "state": self.state, "stage": self.stage, "pct": self.pct,
-             "message": self.message, "error": self.error, "skipped": list(self.skipped)}
+             "message": self.message, "error": self.error, "skipped": list(self.skipped),
+             "question": self.question, "index": self.index, "total": self.total,
+             "cancelling": self.cancel.is_set() and self.state in ("queued", "running")}
         return d
 
 
@@ -1686,7 +1826,34 @@ class WebState:
         for old in sorted(self.jobs.values(), key=lambda j: j.created)[:-KEEP_JOBS]:
             self.jobs.pop(old.id, None)
             shutil.rmtree(self.reports / old.id, ignore_errors=True)
+        self.prune_reports()
         return job
+
+    def prune_reports(self):
+        """Keep only the newest KEEP_JOBS reports on disk (survives server restarts)."""
+        dirs = [d for d in self.reports.iterdir() if d.is_dir() and SAFE_ID.match(d.name)] \
+            if self.reports.is_dir() else []
+        dirs.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+        for d in dirs[KEEP_JOBS:]:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def list_reports(self) -> list:
+        out = []
+        if not self.reports.is_dir():
+            return out
+        for d in self.reports.iterdir():
+            meta = d / "meta.json"
+            if not (d.is_dir() and SAFE_ID.match(d.name) and meta.is_file() and (d / "report.html").is_file()):
+                continue
+            try:
+                m = json.loads(meta.read_text(encoding="utf-8"))
+                out.append({"id": d.name, "created": float(m.get("created", 0)),
+                            "files": [str(x) for x in m.get("files", [])][:8],
+                            "questions": int(m.get("questions", 0))})
+            except (ValueError, OSError, TypeError):
+                continue
+        out.sort(key=lambda r: r["created"], reverse=True)
+        return out[:KEEP_JOBS]
 
     def upload_path(self, uid: str):
         d = self.uploads / uid
@@ -1694,18 +1861,26 @@ class WebState:
         return found[0] if found else None
 
     def run_job(self, job: Job, ids, paths, questions, top_k: int, no_llm: bool):
+        job.files = [p.name for p in paths]
         with self.run_lock:
             job.state = "running"
             job.set("reading", "Opening the documents", 1)
             try:
+                job.check()
                 run = self._analyse(job, paths, questions, top_k, no_llm)
+                job.check()
                 out = self.reports / job.id
                 out.mkdir(parents=True, exist_ok=True)
                 (out / "RESULTS.md").write_text(render_markdown(run), encoding="utf-8")
                 (out / "report.html").write_text(render_html(run), encoding="utf-8")
+                (out / "meta.json").write_text(json.dumps(
+                    {"created": job.created, "files": [d.name for d in run.docs] or job.files,
+                     "questions": len(run.qas)}), encoding="utf-8")
                 job.skipped = list(run.skipped)
                 job.set("composing", "Report ready", 100)
                 job.state = "done"
+            except Cancelled:
+                job.state, job.message = "cancelled", "Cancelled. Nothing was saved."
             except EtudeError as exc:
                 job.error, job.state = str(exc), "error"
             except Exception as exc:  # surface anything unexpected to the page, never to a stack trace
@@ -1723,10 +1898,12 @@ class WebState:
         n = len(paths)
         docs, skipped = [], []
         for i, pdf in enumerate(paths):
+            job.check()
             lo, hi = i / n * 55, (i + 1) / n * 55
             job.set("reading", f"Reading {pdf.name}", lo + 1)
 
             def on_progress(done, total, name=pdf.name, lo=lo, hi=hi):
+                job.check()      # raised before anything is written to the index
                 job.set("embedding", f"Embedding {name} · {done}/{total} passages",
                         lo + (hi - lo) * done / max(total, 1))
 
@@ -1740,7 +1917,10 @@ class WebState:
         ctx = Ctx(col, emb, self.client, a.model, a.top_k, a.min_score, a.no_llm, quiet=True)
         plan = plan_questions(a, docs)
         qas = []
+        job.total = len(plan)
         for i, (q, kind, ids) in enumerate(plan):
+            job.check()
+            job.index, job.question = i + 1, q
             job.set("answering", f"Question {i + 1} of {len(plan)}", 55 + 40 * i / len(plan))
             qas.append(answer_question(q, kind, ids, ctx))
         job.set("composing", "Typesetting the report", 97)
@@ -1812,6 +1992,8 @@ def make_handler(state: WebState):
                                   "text/html; charset=utf-8", {"Content-Security-Policy": csp})
             if route == "/api/status":
                 return self._json(state.status())
+            if route == "/api/reports":
+                return self._json({"reports": state.list_reports()})
             m = re.fullmatch(r"/api/job/([0-9a-f]{32})", route)
             if m:
                 job = state.jobs.get(m.group(1))
@@ -1844,12 +2026,25 @@ def make_handler(state: WebState):
                 return self._upload()
             if route == "/api/analyze":
                 return self._analyze()
+            m = re.fullmatch(r"/api/job/([0-9a-f]{32})/cancel", route)
+            if m:
+                job = state.jobs.get(m.group(1))
+                if not job:
+                    return self._json({"error": "Unknown job"}, 404)
+                job.cancel.set()
+                return self._json({"ok": True})
             return self._json({"error": "Not found"}, 404)
 
         def do_DELETE(self):
             if not self._guard(True):
                 return
-            m = re.fullmatch(r"/api/upload/([0-9a-f]{32})", urlparse(self.path).path)
+            route = urlparse(self.path).path
+            m = re.fullmatch(r"/api/report/([0-9a-f]{32})", route)
+            if m:
+                shutil.rmtree(state.reports / m.group(1), ignore_errors=True)
+                state.jobs.pop(m.group(1), None)
+                return self._json({"ok": True})
+            m = re.fullmatch(r"/api/upload/([0-9a-f]{32})", route)
             if not m:
                 return self._json({"error": "Not found"}, 404)
             shutil.rmtree(state.uploads / m.group(1), ignore_errors=True)

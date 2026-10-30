@@ -28,7 +28,7 @@ Two kinds of document are first-class: **academic papers** and **course syllabi*
 ## Nº 02 — Architecture
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'primaryColor':'#F5F3EE','primaryTextColor':'#191817','primaryBorderColor':'#191817','lineColor':'#8A857B','secondaryColor':'#EFECE6','tertiaryColor':'#F5F3EE','fontFamily':'Georgia, serif'}}}%%
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#F5F3EE','primaryTextColor':'#191817','primaryBorderColor':'#191817','lineColor':'#6F6A61','secondaryColor':'#EFECE6','tertiaryColor':'#F5F3EE','fontFamily':'Georgia, serif'}}}%%
 flowchart LR
   subgraph UI["0 · Interfaces"]
     CLI["Command line<br/>pdf_analyzer.py paper.pdf"]
@@ -93,16 +93,23 @@ If `nomic-embed-text` is absent, the tool falls back to embedding with `llama3.2
 ### The reading room (drag and drop)
 
 ```bash
-python pdf_analyzer.py --serve --open     # or just: python pdf_analyzer.py
+./etude                                   # one command: venv, Ollama, models, then the page
+python pdf_analyzer.py --serve --open     # the same page, if you manage the setup yourself
 ```
+
+`./etude` creates the virtual environment on first run, installs the requirements, starts Ollama if it is not running, pulls any missing model, and opens the page. Any other arguments are passed through (`./etude paper.pdf -q "What are the limitations?"`). Set `ETUDE_MODEL` or `ETUDE_EMBED_MODEL` to use different models.
 
 Your browser opens at `http://127.0.0.1:8501/`.
 
 1. **Drop** one or more PDFs onto the frame (or click it). Each file uploads at once and shows its page count.
 2. **Ask** one question per line, tap a suggestion, or leave the box empty for defaults suited to papers and syllabi. Choose 3, 5 or 8 passages per question; tick *Retrieval only* to skip the language model.
-3. **Analyse.** Progress runs through Read → Embed → Answer → Typeset, then the finished report opens beneath. Open it full-size, or download `report.html` and `RESULTS.md`.
+3. **Analyse.** The button stays pinned to the bottom of the panel, so it is always in reach (Ctrl or Cmd + Enter in the questions box does the same). Progress runs through Read → Embed → Answer → Typeset, with the question being answered, the elapsed time and a rough estimate of what is left. The finished report opens beneath. Open it full-size, or download `report.html` and `RESULTS.md`.
+4. **Cancel** at any time. The run stops after the step in progress (a question already with the model finishes first), nothing is saved, and the uploaded PDFs are deleted.
+5. **Recent readings** lists your last 12 reports below the page, so you can reopen or remove one after closing the tab.
 
-The pills in the top bar show whether Ollama is running and whether each model is installed. The button explains what is missing (`ollama pull …`) rather than failing silently.
+The pills in the top bar show whether Ollama is running and whether each model is installed. The button explains what is missing and offers the command to copy (`ollama pull …`) rather than failing silently.
+
+**The hosted preview.** If you published the repository with GitHub Pages, that page is a static preview: it cannot run Python or Ollama, so uploads are switched off. It shows the sample report built by CI from a demo syllabus, and the command to run the real thing on your computer.
 
 ```bash
 python pdf_analyzer.py --serve --port 9000 --workdir ~/etude-data --max-upload-mb 250
@@ -174,8 +181,8 @@ Both the reading room and the reports share one visual grammar: JW Anderson's ar
 | Raw linen | `#F5F3EE` | Ground, with a faint paper grain |
 | Parchment | `#EFECE6` | Cards and the upload panel |
 | Charcoal | `#191817` | Type, structural rules, match bars |
-| Muted slate | `#8A857B` | Metadata labels, secondary text |
-| Hairline | `#D3CEC6` | 1px dividers |
+| Muted slate | `#6F6A61` | Metadata labels, secondary text (4.8:1 on linen) |
+| Hairline | `#C4BEB4` | 1px dividers |
 
 - **Type.** Headings and synthesised prose use a high-contrast serif stack (`Didot`, `Bodoni MT`, `Cinzel`, `Georgia`). Labels, data and anchors use a system grotesque (`-apple-system`, `Helvetica Neue`, `Arial`). Labels are 10.5px, uppercase, tracked at `0.12em`. No web fonts.
 - **Rhythm.** One spacing scale (4 · 8 · 12 · 16 · 24 · 32 · 48 · 64 · 96 · 128) governs every margin, padding and gap, on a 12-column grid with a 24px gutter.

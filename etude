@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Étude launcher: one command from a fresh clone to the reading room.
+#   ./etude                 open the web UI (default)
+#   ./etude paper.pdf -q "What are the limitations?"     any pdf_analyzer.py arguments
+# Safe to re-run. Everything stays on this machine (Ollama on 127.0.0.1).
+set -euo pipefail
+cd "$(dirname "$0")"
+
+MODEL="${ETUDE_MODEL:-llama3.2}"
+EMBED="${ETUDE_EMBED_MODEL:-nomic-embed-text}"
+OLLAMA_URL="http://127.0.0.1:11434"
+say() { printf '  %s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# 1. Python environment (reuses venv/ or .venv/ if you already have one)
+VENV="venv"; [ -d .venv ] && [ ! -d venv ] && VENV=".venv"
+if [ ! -x "$VENV/bin/python" ]; then
+  PY="$(command -v python3.12 || command -v python3.11 || command -v python3.10 || command -v python3 || true)"
+  [ -n "$PY" ] || die "python3 not found. Install Python 3.10 or newer."
+  say "creating $VENV/"; "$PY" -m venv "$VENV"
+fi
+STAMP="$VENV/.etude-requirements"
+if [ ! -f "$STAMP" ] || [ requirements.txt -nt "$STAMP" ]; then
+  say "installing requirements"
+  "$VENV/bin/python" -m pip install -q --upgrade pip
+  "$VENV/bin/python" -m pip install -q -r requirements.txt
+  touch "$STAMP"
+fi
+
+# 2. Ollama running?
+up() { curl -sf "$OLLAMA_URL/api/tags" >/dev/null 2>&1; }
+if ! up; then
+  command -v ollama >/dev/null 2>&1 || die "Ollama is not installed. Get it from https://ollama.com, then run ./etude again."
+  say "starting ollama"
+  (nohup ollama serve >/tmp/etude-ollama.log 2>&1 &)
+  for _ in $(seq 1 30); do up && break; sleep 1; done
+  up || die "Ollama did not start. See /tmp/etude-ollama.log"
+fi
+
+# 3. Models (embeddings are required; the chat model is only needed for generated answers)
+have() { ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -q "^$1\(:\|$\)"; }
+for m in "$MODEL" "$EMBED"; do
+  have "$m" || { say "pulling $m (one-off download)"; ollama pull "$m"; }
+done
+
+# 4. Go
+if [ "$#" -eq 0 ]; then set -- --serve --open; fi
+exec "$VENV/bin/python" pdf_analyzer.py --model "$MODEL" --embed-model "$EMBED" "$@"
