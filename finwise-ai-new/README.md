@@ -86,7 +86,7 @@ Do not delete `data/` or re-upload existing PDFs for this update.
 3. In a project terminal:
 
 ```sh
-cd /Users/sarita/Desktop/finwise-ai-new
+cd finwise-ai-new
 source .venv/bin/activate
 ollama list
 ```
