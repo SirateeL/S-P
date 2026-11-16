@@ -1,0 +1,5 @@
+Flask>=3.1,<4
+PyMuPDF>=1.25,<2
+chromadb>=1.0,<2
+requests>=2.32,<3
+pytest>=8,<9
