@@ -1,5 +1,0 @@
-# Command line and reading room. The web interface uses only the standard library.
-PyMuPDF>=1.24
-chromadb>=0.5
-ollama>=0.4
-rich>=13.7

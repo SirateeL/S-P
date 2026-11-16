@@ -1,8 +1,8 @@
-venv/
-.rag_db/
-.etude_web/
+.DS_Store
 __pycache__/
 *.pyc
-.DS_Store
+.env
 .venv/
-output/
+venv/
+node_modules/
+*.log
