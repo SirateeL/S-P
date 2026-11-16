@@ -1,0 +1,1 @@
+FinWise AI - Updated version
