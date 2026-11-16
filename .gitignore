@@ -1,8 +1,10 @@
 .DS_Store
 __pycache__/
 *.pyc
+.pytest_cache/
 .env
 .venv/
 venv/
 node_modules/
 *.log
+data/
