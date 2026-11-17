@@ -2,24 +2,17 @@
 
 A local Flask finance learning platform for university students. Includes a responsive dashboard, monthly budget planner, savings calculator, four-topic learning hub, and PDF-grounded AI with page citations. No paid API or cloud account is required.
 
-## Quick start for teammates (download and run)
+## Quick start for teammates (macOS, one command)
 
-This app runs on your own computer. It needs no cloud account, no paid API and no login.
+Install Python 3 and Ollama, then open the Ollama app. Open Terminal, paste this whole command and press Enter. It downloads the project to your Desktop, installs it and starts the app (the first run downloads several GB of AI models):
 
-1. On the GitHub repository page, click the green **Code** button, then **Download ZIP**. Unzip it and open the `finwise-ai-new` folder inside.
-2. Install [Python](https://www.python.org/downloads/) (3.11 or 3.12 recommended) and [Ollama](https://ollama.com/download), then open the Ollama app.
-3. In Terminal, go to the `finwise-ai-new` folder and run:
+    cd ~/Desktop && curl -L -o finwise.zip https://github.com/SirateeL/S-P/archive/refs/heads/main.zip && unzip -q -o finwise.zip && cd S-P-main/finwise-ai-new && python3 -m venv .venv && source .venv/bin/activate && python -m pip install -r requirements.txt && ollama pull nomic-embed-text && ollama pull llama3.2:3b && python app.py
 
-        python3 -m venv .venv
-        source .venv/bin/activate
-        python -m pip install -r requirements.txt
-        ollama pull nomic-embed-text
-        ollama pull llama3.2:3b
-        python app.py
+Then open http://127.0.0.1:5001. To start it again later:
 
-4. Open http://127.0.0.1:5001 in your browser. Press Ctrl+C in Terminal to stop the app.
+    cd ~/Desktop/S-P-main/finwise-ai-new && source .venv/bin/activate && python app.py
 
-Notes: the model downloads are several gigabytes. No PDFs are included in the download, so upload your own text-based finance PDF in **Finance AI expert**. These commands are for macOS/Linux; Windows steps differ and have not been tested. The app has been tested with Python 3.9.6 on macOS.
+No PDFs are included, so upload your own text-based finance PDF. Windows is untested.
 
 ## macOS setup
 
