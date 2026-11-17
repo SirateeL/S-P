@@ -1,0 +1,16 @@
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.env
+.env.*
+!.env.example
+data/
+uploads/
+*.pdf
+*.sqlite*
+*.db
+.DS_Store
+
+.venv-production/

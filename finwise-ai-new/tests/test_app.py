@@ -9,11 +9,14 @@ from app import ServiceError, chunk_text, create_app
 
 @pytest.fixture
 def app(tmp_path):
-    return create_app({'TESTING': True, 'DATA_DIR': str(tmp_path)})
+    return create_app({'TESTING': True, 'DATA_DIR': str(tmp_path), 'FINWISE_ENV': 'local',
+                       'ADMIN_PASSWORD_HASH': '', 'VIEWER_PASSWORD_HASH': '', 'PUBLIC_ORIGIN': ''})
 
 @pytest.fixture
 def client(app):
-    return app.test_client()
+    client = app.test_client()
+    client.environ_base['HTTP_X_FINWISE_REQUEST'] = '1'
+    return client
 
 def test_home(client):
     response = client.get('/')

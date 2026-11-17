@@ -11,6 +11,7 @@ from pathlib import Path
 import requests
 from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.utils import secure_filename
+from security import configure_security, install_security, single_ai_request
 
 class ServiceError(Exception):
     pass
@@ -22,6 +23,7 @@ class KnowledgeBase:
         self.uploads = self.root / 'uploads'
         self.uploads.mkdir(exist_ok=True)
         self.lock = threading.Lock()
+        self.ai_slot = threading.BoundedSemaphore(1)
         self._collection = None
         self.host = os.environ.get('OLLAMA_URL', 'http://127.0.0.1:11434').rstrip('/')
         self.model = os.environ.get('OLLAMA_MODEL', 'llama3.2:3b')
@@ -288,8 +290,10 @@ def chunk_text(text, size=1100, overlap=180):
 def create_app(test_config=None):
     app = Flask(__name__)
     app.config.update(MAX_CONTENT_LENGTH=20 * 1024 * 1024, DATA_DIR=os.environ.get('FINWISE_DATA_DIR', str(Path(__file__).parent / 'data')))
+    configure_security(app)
     if test_config:
         app.config.update(test_config)
+    install_security(app)
     kb = KnowledgeBase(app.config['DATA_DIR'])
     app.extensions['knowledge'] = kb
 
@@ -313,6 +317,7 @@ def create_app(test_config=None):
         return jsonify(documents=kb.documents())
 
     @app.post('/api/documents')
+    @single_ai_request(kb)
     def upload():
         file = request.files.get('file')
         if not file or not file.filename or not file.filename.lower().endswith('.pdf'):
@@ -342,6 +347,7 @@ def create_app(test_config=None):
         return jsonify(ok=True)
 
     @app.post('/api/chat')
+    @single_ai_request(kb)
     def chat():
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):

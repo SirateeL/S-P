@@ -2,6 +2,25 @@
 
 A local Flask finance learning platform for university students. Includes a responsive dashboard, monthly budget planner, savings calculator, four-topic learning hub, and PDF-grounded AI with page citations. No paid API or cloud account is required.
 
+## Quick start for teammates (download and run)
+
+This app runs on your own computer. It needs no cloud account, no paid API and no login.
+
+1. On the GitHub repository page, click the green **Code** button, then **Download ZIP**. Unzip it and open the `finwise-ai-new` folder inside.
+2. Install [Python](https://www.python.org/downloads/) (3.11 or 3.12 recommended) and [Ollama](https://ollama.com/download), then open the Ollama app.
+3. In Terminal, go to the `finwise-ai-new` folder and run:
+
+        python3 -m venv .venv
+        source .venv/bin/activate
+        python -m pip install -r requirements.txt
+        ollama pull nomic-embed-text
+        ollama pull llama3.2:3b
+        python app.py
+
+4. Open http://127.0.0.1:5001 in your browser. Press Ctrl+C in Terminal to stop the app.
+
+Notes: the model downloads are several gigabytes. No PDFs are included in the download, so upload your own text-based finance PDF in **Finance AI expert**. These commands are for macOS/Linux; Windows steps differ and have not been tested. The app has been tested with Python 3.9.6 on macOS.
+
 ## macOS setup
 
 Use **Python 3.11 or 3.12** (recommended for ChromaDB compatibility). Install Python from python.org or, with Homebrew, `brew install python@3.12`. Install Ollama from [ollama.com](https://ollama.com/download/mac), then open the Ollama application. Alternatively run `ollama serve` in a separate terminal if it is not already running.
@@ -67,7 +86,7 @@ python app.py
 - **Port in use:** `PORT=5002 python app.py`, then open the corresponding URL.
 - **Dependencies fail on Apple's system Python:** create a fresh environment with Python 3.11/3.12. Do not install into the system Python.
 
-This is a single-user local application. It binds to localhost, uses no CDN assets and has no external model calls when using the default Ollama address. It has no multiuser authentication and is not configured for public deployment. Do not expose the Flask port to a network. Uploaded files are validated by extension, signature and PDF parser, stored under random IDs, and served only through validated IDs. Secrets, PDFs, databases, runtime data and virtual environments are excluded by `.gitignore`.
+This is a single-user local application. It binds to localhost, uses no CDN assets and has no external model calls when using the default Ollama address. By default it needs no login and accepts connections only from your own computer. Optional password protection exists (see `.env.example`), but cloud deployment has not been set up or verified. Do not expose the Flask port to a network. Uploaded files are validated by extension, signature and PDF parser, stored under random IDs, and served only through validated IDs. Secrets, PDFs, databases, runtime data and virtual environments are excluded by `.gitignore`.
 
 ## Manual acceptance checks
 
